@@ -142,7 +142,7 @@ const PersonList: React.FC<PersonListProps> = ({
           {activeTab === 'conversations' && (
             <div className="relative" ref={dropdownRef}>
               <button
-                onClick={() => setShowNewOptions(!showNewOptions)}
+                onClick={() => onCreateNewChat()}
                 className="p-2 rounded-full text-blue-600 hover:text-blue-800 hover:bg-blue-50 focus:outline-none focus:bg-blue-100 transition duration-150"
                 aria-label="Create new conversation"
               >
@@ -150,54 +150,6 @@ const PersonList: React.FC<PersonListProps> = ({
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
                 </svg>
               </button>
-              
-              {showNewOptions && (
-                <div className="absolute right-0 mt-2 w-56 bg-white rounded-lg shadow-lg z-10 border border-gray-100 overflow-hidden">
-                  <div className="py-1">
-                    <button
-                      onClick={() => {
-                        onCreateNewChat();
-                        setShowNewOptions(false);
-                      }}
-                      className="block w-full text-left px-4 py-3 text-sm text-gray-700 hover:bg-gray-50"
-                    >
-                      <div className="flex items-center">
-                        <div className="bg-blue-100 rounded-full p-2 mr-3">
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
-                          </svg>
-                        </div>
-                        <div>
-                          <p className="font-medium">New Conversation</p>
-                          <p className="text-xs text-gray-500">Start a one-on-one conversation</p>
-                        </div>
-                      </div>
-                    </button>
-                    <button
-                      onClick={() => {
-                        onCreateNewChat();
-                        // This will be handled by the Layout component
-                        // which will detect the isBlastEmail flag is set to true
-                        window.dispatchEvent(new CustomEvent('openBlastEmail'));
-                        setShowNewOptions(false);
-                      }}
-                      className="block w-full text-left px-4 py-3 text-sm text-gray-700 hover:bg-gray-50"
-                    >
-                      <div className="flex items-center">
-                        <div className="bg-purple-100 rounded-full p-2 mr-3">
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 text-purple-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                          </svg>
-                        </div>
-                        <div>
-                          <p className="font-medium">New Blast Email</p>
-                          <p className="text-xs text-gray-500">Send a message to multiple people</p>
-                        </div>
-                      </div>
-                    </button>
-                  </div>
-                </div>
-              )}
             </div>
           )}
         </div>
@@ -246,7 +198,7 @@ const PersonList: React.FC<PersonListProps> = ({
                       <div className="font-medium text-gray-900 flex items-center">
                         {folder.id === 'others' ? (
                           <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2M7 7h10" />
                           </svg>
                         ) : folder.id === 'reply_needed' ? (
                           <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-2 text-orange-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -302,7 +254,14 @@ const PersonList: React.FC<PersonListProps> = ({
                           <div className="flex-shrink-0 h-8 w-8 rounded-full bg-gradient-to-br from-blue-400 to-indigo-600 flex items-center justify-center text-white mr-2 shadow-sm">
                             {person.name ? person.name.charAt(0).toUpperCase() : person.email.charAt(0).toUpperCase()}
                           </div>
-                          <span>{person.name || person.email}</span>
+                          <div className="flex items-center">
+                            <span className="mr-2">{person.name || person.email}</span>
+                            {person.unreadCount > 0 && (
+                              <div className="flex-shrink-0 h-5 w-5 rounded-full bg-blue-500 flex items-center justify-center text-xs font-medium text-white shadow-sm">
+                                {person.unreadCount}
+                              </div>
+                            )}
+                          </div>
                         </div>
                         <div className="text-xs text-gray-500 ml-2 whitespace-nowrap">
                           {formatDate(person.lastMessageDate)}
@@ -318,12 +277,6 @@ const PersonList: React.FC<PersonListProps> = ({
                         {person.status && (
                           <div className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
                             {person.status}
-                          </div>
-                        )}
-                        
-                        {person.unreadCount > 0 && (
-                          <div className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 shadow-sm">
-                            {person.unreadCount}
                           </div>
                         )}
                       </div>

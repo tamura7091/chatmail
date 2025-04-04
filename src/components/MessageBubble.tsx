@@ -12,14 +12,13 @@ interface MessageBubbleProps {
 
 export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isFromUser }) => {
   const { conversations } = useGmail();
-  const [isExpanded, setIsExpanded] = useState(false);
   const [showAssignDropdown, setShowAssignDropdown] = useState(false);
   const [showRemindDropdown, setShowRemindDropdown] = useState(false);
   const [showFollowUpDropdown, setShowFollowUpDropdown] = useState(false);
   
-  const assignRef = useRef<HTMLDivElement>(null);
-  const remindRef = useRef<HTMLDivElement>(null);
-  const followUpRef = useRef<HTMLDivElement>(null);
+  const assignRef = useRef<HTMLButtonElement>(null);
+  const remindRef = useRef<HTMLButtonElement>(null);
+  const followUpRef = useRef<HTMLButtonElement>(null);
 
   // Extract date from headers
   const dateHeader = message.payload.headers.find(
@@ -105,7 +104,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isFromUse
         isFromUser ? 'ml-auto' : 'mr-auto'
       }`}
     >
-      {!isFromUser && !isExpanded && (
+      {!isFromUser && (
         <div className="text-xs font-medium text-gray-600 ml-2 mb-1 flex items-center">
           <div className="w-6 h-6 rounded-full bg-gray-200 flex items-center justify-center text-gray-600 mr-1 text-[10px]">
             {senderName.charAt(0).toUpperCase()}
@@ -121,50 +120,19 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isFromUse
             : 'bg-white text-gray-800 border border-gray-100'
         }`}
       >
-        {subjectHeader && !isExpanded && subjectHeader.value !== 'Re: ' && (
+        {subjectHeader && subjectHeader.value !== 'Re: ' && (
           <div className={`font-semibold mb-1 ${isFromUser ? 'text-blue-100' : 'text-gray-700'}`}>
             {subjectHeader.value}
           </div>
         )}
         
-        {!isExpanded ? (
-          <div
-            className="cursor-pointer text-sm leading-relaxed"
-            onClick={() => setIsExpanded(true)}
-          >
-            {message.snippet}
-            {message.snippet.length > 100 && (
-              <span className={`text-xs ml-1 inline-flex items-center ${isFromUser ? 'text-blue-200' : 'text-gray-500'}`}>
-                more...
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 ml-0.5" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
-                </svg>
-              </span>
-            )}
-          </div>
+        {html ? (
+          <div 
+            className="message-content text-sm leading-relaxed" 
+            dangerouslySetInnerHTML={{ __html: sanitizedContent }}
+          />
         ) : (
-          <div>
-            {html ? (
-              <div 
-                className="message-content text-sm leading-relaxed" 
-                dangerouslySetInnerHTML={{ __html: sanitizedContent }}
-              />
-            ) : (
-              <div className="whitespace-pre-wrap text-sm leading-relaxed">{sanitizedContent}</div>
-            )}
-            
-            <div
-              className={`text-xs cursor-pointer mt-2 flex items-center ${
-                isFromUser ? 'text-blue-200' : 'text-gray-500'
-              }`}
-              onClick={() => setIsExpanded(false)}
-            >
-              <span>Show less</span>
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 ml-0.5" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M14.707 12.707a1 1 0 01-1.414 0L10 9.414l-3.293 3.293a1 1 0 01-1.414-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 010 1.414z" clipRule="evenodd" />
-              </svg>
-            </div>
-          </div>
+          <div className="whitespace-pre-wrap text-sm leading-relaxed">{sanitizedContent}</div>
         )}
       </div>
       

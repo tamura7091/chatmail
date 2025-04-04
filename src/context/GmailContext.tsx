@@ -9,7 +9,7 @@ import {
   groupMessagesByPerson,
   sendEmail
 } from '../utils/gmailAPI';
-import { EmailMessage, Person, Conversation, UserProfile, SpecialFolder, Group, Contact } from '../types';
+import { EmailMessage, Person, Conversation, UserProfile, SpecialFolder, Group, Contact, TagContact } from '../types';
 import { mockUserProfile, mockConversations, mockMessages } from '../mocks/mockData';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -25,6 +25,7 @@ interface GmailContextType {
   specialFolders: Record<string, SpecialFolder>;
   groups: Record<string, Group>;
   contacts: Record<string, Contact>;
+  contactTags: Record<string, TagContact>;
   selectedView: 'conversation' | 'special_folder' | 'group';
   selectedId: string | null;
   handleSignIn: () => Promise<void>;
@@ -43,8 +44,11 @@ interface GmailContextType {
   updateContact: (id: string, contactData: Partial<Omit<Contact, 'id' | 'createdAt' | 'updatedAt'>>) => boolean;
   deleteContact: (id: string) => boolean;
   getContactByEmail: (email: string) => Contact | null;
-  addContactToGroup: (contactId: string, groupId: string) => boolean;
-  removeContactFromGroup: (contactId: string, groupId: string) => boolean;
+  createContactTag: (name: string, color?: string) => string;
+  updateContactTag: (id: string, name: string, color?: string) => boolean;
+  deleteContactTag: (id: string) => boolean;
+  addContactToTag: (contactId: string, tagId: string) => boolean;
+  removeContactFromTag: (contactId: string, tagId: string) => boolean;
 }
 
 const GmailContext = createContext<GmailContextType | undefined>(undefined);
@@ -83,6 +87,7 @@ export const GmailProvider: React.FC<GmailProviderProps> = ({ children }) => {
   });
   const [groups, setGroups] = useState<Record<string, Group>>({});
   const [contacts, setContacts] = useState<Record<string, Contact>>({});
+  const [contactTags, setContactTags] = useState<Record<string, TagContact>>({});
   const [selectedView, setSelectedView] = useState<'conversation' | 'special_folder' | 'group'>('conversation');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [isCreatingNewConversation, setIsCreatingNewConversation] = useState(false);
@@ -395,7 +400,7 @@ export const GmailProvider: React.FC<GmailProviderProps> = ({ children }) => {
             contactId: id,
             name: contactData.name,
             alternateEmails: contactData.alternateEmails,
-            groups: contactData.groups
+            tags: contactData.tags
           };
         }
       });
@@ -434,7 +439,7 @@ export const GmailProvider: React.FC<GmailProviderProps> = ({ children }) => {
             ...person,
             name: contact.name,
             alternateEmails: contact.alternateEmails,
-            groups: contact.groups
+            tags: contact.tags
           };
         }
       });
@@ -464,7 +469,7 @@ export const GmailProvider: React.FC<GmailProviderProps> = ({ children }) => {
         
         if (person.contactId === id) {
           // Remove contact association
-          const { contactId, alternateEmails, groups, ...restPerson } = person;
+          const { contactId, alternateEmails, tags, ...restPerson } = person;
           updatedConversations[key].person = restPerson;
         }
       });
@@ -472,24 +477,133 @@ export const GmailProvider: React.FC<GmailProviderProps> = ({ children }) => {
       return updatedConversations;
     });
     
-    // Remove from groups
-    setGroups(prev => {
-      const updatedGroups = { ...prev };
+    // Remove from contact tags
+    setContactTags(prev => {
+      const updatedTags = { ...prev };
       
-      Object.keys(updatedGroups).forEach(groupId => {
-        const group = updatedGroups[groupId];
-        const filteredMembers = group.members.filter(member => member.contactId !== id);
-        
-        if (filteredMembers.length !== group.members.length) {
-          updatedGroups[groupId] = {
-            ...group,
-            members: filteredMembers
+      Object.keys(updatedTags).forEach(tagId => {
+        const tag = updatedTags[tagId];
+        if (tag.contactIds.includes(id)) {
+          updatedTags[tagId] = {
+            ...tag,
+            contactIds: tag.contactIds.filter(cId => cId !== id)
           };
         }
       });
       
-      return updatedGroups;
+      return updatedTags;
     });
+    
+    return true;
+  };
+  
+  // Contact tag management
+  const createContactTag = (name: string, color?: string): string => {
+    const id = uuidv4();
+    const newTag: TagContact = {
+      id,
+      name,
+      color: color || generateRandomColor(),
+      contactIds: []
+    };
+    
+    setContactTags(prev => ({
+      ...prev,
+      [id]: newTag
+    }));
+    
+    return id;
+  };
+  
+  const updateContactTag = (id: string, name: string, color?: string): boolean => {
+    if (!contactTags[id]) return false;
+    
+    setContactTags(prev => ({
+      ...prev,
+      [id]: {
+        ...prev[id],
+        name,
+        ...(color && { color })
+      }
+    }));
+    
+    return true;
+  };
+  
+  const deleteContactTag = (id: string): boolean => {
+    if (!contactTags[id]) return false;
+    
+    const updatedTags = { ...contactTags };
+    delete updatedTags[id];
+    setContactTags(updatedTags);
+    
+    // Remove this tag from all contacts
+    const updatedContacts = { ...contacts };
+    Object.keys(updatedContacts).forEach(contactId => {
+      if (updatedContacts[contactId].tags.includes(id)) {
+        updatedContacts[contactId] = {
+          ...updatedContacts[contactId],
+          tags: updatedContacts[contactId].tags.filter(tagId => tagId !== id)
+        };
+      }
+    });
+    setContacts(updatedContacts);
+    
+    return true;
+  };
+  
+  const addContactToTag = (contactId: string, tagId: string): boolean => {
+    if (!contacts[contactId] || !contactTags[tagId]) return false;
+    
+    // Add tag to contact
+    if (!contacts[contactId].tags.includes(tagId)) {
+      setContacts(prev => ({
+        ...prev,
+        [contactId]: {
+          ...prev[contactId],
+          tags: [...prev[contactId].tags, tagId]
+        }
+      }));
+    }
+    
+    // Add contact to tag
+    if (!contactTags[tagId].contactIds.includes(contactId)) {
+      setContactTags(prev => ({
+        ...prev,
+        [tagId]: {
+          ...prev[tagId],
+          contactIds: [...prev[tagId].contactIds, contactId]
+        }
+      }));
+    }
+    
+    return true;
+  };
+  
+  const removeContactFromTag = (contactId: string, tagId: string): boolean => {
+    if (!contacts[contactId] || !contactTags[tagId]) return false;
+    
+    // Remove tag from contact
+    if (contacts[contactId].tags.includes(tagId)) {
+      setContacts(prev => ({
+        ...prev,
+        [contactId]: {
+          ...prev[contactId],
+          tags: prev[contactId].tags.filter(id => id !== tagId)
+        }
+      }));
+    }
+    
+    // Remove contact from tag
+    if (contactTags[tagId].contactIds.includes(contactId)) {
+      setContactTags(prev => ({
+        ...prev,
+        [tagId]: {
+          ...prev[tagId],
+          contactIds: prev[tagId].contactIds.filter(id => id !== contactId)
+        }
+      }));
+    }
     
     return true;
   };
@@ -503,65 +617,6 @@ export const GmailProvider: React.FC<GmailProviderProps> = ({ children }) => {
     )?.id;
     
     return contactId ? contacts[contactId] : null;
-  };
-  
-  const addContactToGroup = (contactId: string, groupId: string) => {
-    if (!contacts[contactId] || !groups[groupId]) return false;
-    
-    // Add group to contact
-    const contact = contacts[contactId];
-    if (!contact.groups.includes(groupId)) {
-      updateContact(contactId, {
-        groups: [...contact.groups, groupId]
-      });
-    }
-    
-    // Add contact to group if not already a member
-    const group = groups[groupId];
-    const isMember = group.members.some(member => member.contactId === contactId);
-    
-    if (!isMember) {
-      setGroups(prev => ({
-        ...prev,
-        [groupId]: {
-          ...group,
-          members: [
-            ...group.members,
-            {
-              email: contact.primaryEmail,
-              name: contact.name,
-              contactId: contact.id
-            }
-          ]
-        }
-      }));
-    }
-    
-    return true;
-  };
-  
-  const removeContactFromGroup = (contactId: string, groupId: string) => {
-    if (!contacts[contactId] || !groups[groupId]) return false;
-    
-    // Remove group from contact
-    const contact = contacts[contactId];
-    if (contact.groups.includes(groupId)) {
-      updateContact(contactId, {
-        groups: contact.groups.filter(id => id !== groupId)
-      });
-    }
-    
-    // Remove contact from group
-    const group = groups[groupId];
-    setGroups(prev => ({
-      ...prev,
-      [groupId]: {
-        ...group,
-        members: group.members.filter(member => member.contactId !== contactId)
-      }
-    }));
-    
-    return true;
   };
 
   // Create Group method update
@@ -595,7 +650,7 @@ export const GmailProvider: React.FC<GmailProviderProps> = ({ children }) => {
     // Update contacts to include this group
     memberObjects.forEach(member => {
       if (member.contactId) {
-        addContactToGroup(member.contactId, id);
+        addContactToTag(member.contactId, id);
       }
     });
   };
@@ -710,9 +765,9 @@ export const GmailProvider: React.FC<GmailProviderProps> = ({ children }) => {
           }
         };
         
-        // If there's a contact, also update the contact's groups
+        // If there's a contact, also update the contact's tags
         if (contactId) {
-          addContactToGroup(contactId, groupId);
+          addContactToTag(contactId, groupId);
         }
         
         return updated;
@@ -730,9 +785,9 @@ export const GmailProvider: React.FC<GmailProviderProps> = ({ children }) => {
           m => m.email.toLowerCase() === memberEmail.toLowerCase()
         );
         
-        // If the member has a contactId, update the contact's groups
+        // If the member has a contactId, update the contact's tags
         if (memberToRemove?.contactId) {
-          removeContactFromGroup(memberToRemove.contactId, groupId);
+          removeContactFromTag(memberToRemove.contactId, groupId);
         }
         
         const updated = {
@@ -750,6 +805,19 @@ export const GmailProvider: React.FC<GmailProviderProps> = ({ children }) => {
     });
   };
 
+  // Generate a random color for tags
+  const generateRandomColor = (): string => {
+    const colors = [
+      '#EF4444', // red
+      '#F59E0B', // amber
+      '#10B981', // emerald
+      '#3B82F6', // blue
+      '#8B5CF6', // violet
+      '#EC4899', // pink
+    ];
+    return colors[Math.floor(Math.random() * colors.length)];
+  };
+
   const value = {
     isLoading,
     isAuthenticated,
@@ -762,6 +830,7 @@ export const GmailProvider: React.FC<GmailProviderProps> = ({ children }) => {
     specialFolders,
     groups,
     contacts,
+    contactTags,
     selectedView,
     selectedId,
     handleSignIn,
@@ -780,8 +849,11 @@ export const GmailProvider: React.FC<GmailProviderProps> = ({ children }) => {
     updateContact,
     deleteContact,
     getContactByEmail,
-    addContactToGroup,
-    removeContactFromGroup,
+    createContactTag,
+    updateContactTag,
+    deleteContactTag,
+    addContactToTag,
+    removeContactFromTag,
   };
 
   return <GmailContext.Provider value={value}>{children}</GmailContext.Provider>;

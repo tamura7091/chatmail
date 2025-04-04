@@ -48,7 +48,7 @@ export interface Person {
   action?: string;
   contactId?: string;
   alternateEmails?: string[];
-  groups?: string[];
+  tags?: string[];
   phone?: string;
   notes?: string;
   company?: string;
@@ -60,13 +60,20 @@ export interface Contact {
   name: string;
   primaryEmail: string;
   alternateEmails: string[];
-  groups: string[];
+  tags: string[];
   phone?: string;
   company?: string;
   title?: string;
   notes?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface TagContact {
+  id: string;
+  name: string;
+  color?: string;
+  contactIds: string[];
 }
 
 export interface Conversation {
