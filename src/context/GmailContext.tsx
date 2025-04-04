@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback } from 'react';
 import {
   loadGmailApi,
   isUserSignedIn,
@@ -36,6 +36,10 @@ interface GmailContextType {
   handleSignIn: () => Promise<void>;
   handleSignOut: () => Promise<void>;
   loadMoreMessages: () => Promise<void>;
+  refreshMessages: () => Promise<boolean>;
+  isAutoRefreshEnabled: boolean;
+  toggleAutoRefresh: () => void;
+  lastRefresh: Date;
   selectPerson: (email: string) => void;
   selectSpecialFolder: (id: string) => void;
   selectGroup: (id: string) => void;
@@ -72,6 +76,8 @@ export const GmailProvider: React.FC<GmailProviderProps> = ({ children }) => {
   const [currentPerson, setCurrentPerson] = useState<string | null>(null);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isAutoRefreshEnabled, setIsAutoRefreshEnabled] = useState(false);
+  const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
   const [specialFolders, setSpecialFolders] = useState<Record<string, SpecialFolder>>({
     others: {
       id: 'others',
@@ -299,11 +305,15 @@ export const GmailProvider: React.FC<GmailProviderProps> = ({ children }) => {
                 recentAutomatedMessages.push(message);
               }
               
-              // Detect if action is needed
-              const actionNeeded = await detectActionNeeded(message);
-              if (actionNeeded) {
-                // Store the action on the message object (ensuring non-null value)
-                message.actionNeeded = actionNeeded;
+              // Only detect actions for real human messages to save API calls
+              if (isRealHuman) {
+                // Detect if action is needed
+                const actionNeeded = await detectActionNeeded(message);
+                if (actionNeeded) {
+                  // Store the action on the message object (ensuring non-null value)
+                  message.actionNeeded = actionNeeded;
+                  console.log(`Action needed for message from ${message.id}: ${actionNeeded}`);
+                }
               }
             });
             
@@ -911,35 +921,196 @@ export const GmailProvider: React.FC<GmailProviderProps> = ({ children }) => {
     });
   };
 
+  // Toggle auto-refresh functionality
+  const toggleAutoRefresh = useCallback(() => {
+    setIsAutoRefreshEnabled(prevState => !prevState);
+  }, []);
+
+  // Refresh messages function to fetch latest emails
+  const refreshMessages = useCallback(async (): Promise<boolean> => {
+    if (loadingMessages || !isAuthenticated) {
+      console.log("Cannot refresh: loading in progress or not authenticated");
+      return false;
+    }
+
+    try {
+      setLoadingMessages(true);
+      console.log("Refreshing messages...");
+      
+      // Fetch new messages
+      await loadInitialMessages();
+      
+      // Update last refresh time
+      setLastRefresh(new Date());
+      
+      return true;
+    } catch (error) {
+      console.error("Error refreshing messages:", error);
+      setError("Failed to refresh messages");
+      return false;
+    } finally {
+      setLoadingMessages(false);
+    }
+  }, [loadingMessages, isAuthenticated, loadInitialMessages]);
+
+  // Set up auto-refresh interval
+  useEffect(() => {
+    let intervalId: NodeJS.Timeout | null = null;
+
+    if (isAutoRefreshEnabled && isAuthenticated) {
+      console.log("Auto-refresh enabled, setting up interval");
+      intervalId = setInterval(() => {
+        console.log("Auto-refreshing messages");
+        refreshMessages();
+      }, 60000); // Refresh every minute
+    }
+
+    return () => {
+      if (intervalId) {
+        clearInterval(intervalId);
+      }
+    };
+  }, [isAutoRefreshEnabled, isAuthenticated, refreshMessages]);
+
   const sendMessage = async (to: string, body: string): Promise<boolean> => {
     try {
       setLoadingMessages(true);
       
-      if (userProfile) {
-        // Get current date
-        const currentDate = new Date().toISOString();
-        const subject = "New message"; // Default subject
-        
-        // Real implementation using Gmail API
-        const success = await sendEmail(to, subject, body, userProfile.email);
-        
-        if (success) {
-          // After sending email, refresh conversations to include the sent message
-          await loadInitialMessages();
-          
-          // If this is to a new recipient, select them
-          if (!conversations[to.toLowerCase()]) {
-            setCurrentPerson(to.toLowerCase());
-          }
-          
-          return true;
-        }
+      if (!userProfile || !userProfile.email) {
+        console.error('Cannot send message: user profile or email is missing');
+        setError('Cannot send message: user profile is missing');
         return false;
       }
-      return false;
+      
+      console.log(`Attempting to send message to: ${to}`);
+      
+      // Get current date
+      const currentDate = new Date().toISOString();
+      const subject = "New message"; // Default subject
+      
+      // Create a temporary message to show immediately in the UI
+      const tempMessageId = `temp-${Date.now()}`;
+      
+      // Safely encode body content
+      let encodedBody;
+      try {
+        encodedBody = btoa(unescape(encodeURIComponent(body)));
+      } catch (encodingError) {
+        console.error('Error encoding message body:', encodingError);
+        setError('Failed to encode message content');
+        return false;
+      }
+      
+      const tempMessage: EmailMessage = {
+        id: tempMessageId,
+        threadId: `thread-${Date.now()}`,
+        labelIds: ['SENT'],
+        snippet: body.substring(0, 100) + (body.length > 100 ? '...' : ''),
+        payload: {
+          mimeType: 'text/html',
+          headers: [
+            { name: 'From', value: `${userProfile.name} <${userProfile.email}>` },
+            { name: 'To', value: to },
+            { name: 'Subject', value: subject },
+            { name: 'Date', value: currentDate },
+          ],
+          body: {
+            size: body.length,
+            data: encodedBody,
+          },
+        },
+        sizeEstimate: body.length,
+        historyId: Date.now().toString(),
+        internalDate: Date.now().toString(),
+        isRealHuman: true // Mark as real human since it's from the user
+      };
+      
+      // Update conversations state immediately to show the sent message
+      const recipientEmail = to.toLowerCase();
+      const updatedConversations = {...conversations};
+      
+      if (updatedConversations[recipientEmail]) {
+        // Add to existing conversation
+        updatedConversations[recipientEmail].messages = [
+          ...updatedConversations[recipientEmail].messages, 
+          tempMessage
+        ];
+        
+        // Sort messages by date
+        updatedConversations[recipientEmail].messages.sort(
+          (a, b) => parseInt(a.internalDate) - parseInt(b.internalDate)
+        );
+        
+        updatedConversations[recipientEmail].person.lastMessageDate = currentDate;
+        updatedConversations[recipientEmail].person.lastMessageSnippet = tempMessage.snippet;
+      } else {
+        // Create new conversation
+        updatedConversations[recipientEmail] = {
+          person: {
+            email: recipientEmail,
+            name: recipientEmail.split('@')[0], // Use email username as name
+            lastMessageDate: currentDate,
+            lastMessageSnippet: tempMessage.snippet,
+            unreadCount: 0,
+          },
+          messages: [tempMessage]
+        };
+      }
+      
+      // Update state immediately to show the message
+      setConversations(updatedConversations);
+      
+      // Also add to messages
+      setMessages(prev => [...prev, tempMessage]);
+      
+      // Send the actual email through the API
+      console.log('Sending email via Gmail API...');
+      const success = await sendEmail(to, subject, body, userProfile.email);
+      
+      if (success) {
+        console.log('Email sent successfully');
+        
+        // After sending email, refresh to get the actual sent message
+        setTimeout(() => {
+          console.log('Refreshing messages to get the sent message from the API');
+          refreshMessages();
+        }, 2000); // Wait 2 seconds before refreshing
+        
+        // If this is to a new recipient, select them
+        if (!conversations[recipientEmail]) {
+          setCurrentPerson(recipientEmail);
+        }
+        
+        return true;
+      } else {
+        console.error('Failed to send email via Gmail API');
+        
+        // If sending failed, remove the temporary message
+        const filteredConversations = {...updatedConversations};
+        if (filteredConversations[recipientEmail]) {
+          filteredConversations[recipientEmail].messages = filteredConversations[recipientEmail].messages
+            .filter(msg => msg.id !== tempMessageId);
+            
+          if (filteredConversations[recipientEmail].messages.length === 0) {
+            delete filteredConversations[recipientEmail];
+          } else {
+            // Update the last message info
+            const lastMsg = filteredConversations[recipientEmail].messages[filteredConversations[recipientEmail].messages.length - 1];
+            const lastDateHeader = lastMsg.payload.headers.find(h => h.name.toLowerCase() === 'date');
+            filteredConversations[recipientEmail].person.lastMessageDate = lastDateHeader?.value || '';
+            filteredConversations[recipientEmail].person.lastMessageSnippet = lastMsg.snippet;
+          }
+        }
+        
+        setConversations(filteredConversations);
+        setMessages(prev => prev.filter(msg => msg.id !== tempMessageId));
+        
+        setError('Failed to send message via Gmail API');
+        return false;
+      }
     } catch (error) {
       console.error('Error sending message:', error);
-      setError('Failed to send message');
+      setError(`Failed to send message: ${error instanceof Error ? error.message : 'Unknown error'}`);
       return false;
     } finally {
       setLoadingMessages(false);
@@ -1057,6 +1228,10 @@ export const GmailProvider: React.FC<GmailProviderProps> = ({ children }) => {
     handleSignIn,
     handleSignOut,
     loadMoreMessages,
+    refreshMessages,
+    isAutoRefreshEnabled,
+    toggleAutoRefresh,
+    lastRefresh,
     selectPerson,
     selectSpecialFolder,
     selectGroup,
@@ -1077,7 +1252,53 @@ export const GmailProvider: React.FC<GmailProviderProps> = ({ children }) => {
     removeContactFromTag,
   };
 
-  return <GmailContext.Provider value={value}>{children}</GmailContext.Provider>;
+  return (
+    <GmailContext.Provider
+      value={{
+        isLoading,
+        isAuthenticated,
+        userProfile,
+        conversations,
+        messages,
+        currentPerson,
+        loadingMessages,
+        error,
+        specialFolders,
+        groups,
+        contacts,
+        contactTags,
+        selectedView,
+        selectedId,
+        handleSignIn,
+        handleSignOut,
+        loadMoreMessages,
+        refreshMessages,
+        isAutoRefreshEnabled,
+        toggleAutoRefresh,
+        lastRefresh,
+        selectPerson,
+        selectSpecialFolder,
+        selectGroup,
+        updatePersonStatus,
+        createGroup,
+        addToGroup,
+        removeFromGroup,
+        sendMessage,
+        createNewConversation,
+        createContact,
+        updateContact,
+        deleteContact,
+        getContactByEmail,
+        createContactTag,
+        updateContactTag,
+        deleteContactTag,
+        addContactToTag,
+        removeContactFromTag,
+      }}
+    >
+      {children}
+    </GmailContext.Provider>
+  );
 };
 
 export const useGmail = (): GmailContextType => {

@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Person, SpecialFolder, Group } from '../types';
-import { formatDistanceToNow } from 'date-fns';
+import { formatDistanceToNow, format } from 'date-fns';
 import { useGmail } from '../context/GmailContext';
 
 interface PersonListProps {
@@ -36,6 +36,14 @@ const PersonList: React.FC<PersonListProps> = ({
   const [showNewOptions, setShowNewOptions] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   
+  // Get refreshMessages, loadingMessages, lastRefresh from context
+  const { refreshMessages, loadingMessages, lastRefresh, isAutoRefreshEnabled, toggleAutoRefresh } = useGmail();
+
+  // Handle refresh button click
+  const handleRefresh = () => {
+    refreshMessages();
+  };
+
   // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -67,50 +75,48 @@ const PersonList: React.FC<PersonListProps> = ({
     }
   };
 
-  // Get more specific action text based on general action
+  // Function to get specific action text (remove redundant action prefixes if present)
   const getSpecificActionText = (action: string) => {
-    if (action.includes("Urgent")) {
-      return "Send invoice payment ASAP";
-    }
-    if (action.includes("Reply")) {
-      return "Respond to meeting proposal";
-    }
-    if (action.includes("Task")) {
-      return "Complete requested document";
-    }
-    if (action.includes("Review")) {
-      return "Review attached contract";
-    }
-    if (action.includes("Waiting")) {
-      return "Follow up after 3 days";
-    }
-    return "Send the payout form";
+    // Remove common prefixes that might be included by the AI
+    return action
+      .replace(/^action needed:?\s*/i, '')
+      .replace(/^reply:?\s*/i, '')
+      .replace(/^urgent:?\s*/i, '')
+      .replace(/^review:?\s*/i, '')
+      .replace(/^task:?\s*/i, '')
+      .replace(/^waiting:?\s*/i, '')
+      .trim();
   };
 
   // Function to get action icon based on action text
   const getActionIcon = (action: string) => {
-    if (action.includes("Urgent")) {
+    const actionLower = action.toLowerCase();
+    
+    if (actionLower.includes("urgent") || actionLower.includes("asap") || actionLower.includes("immediately")) {
       return (
         <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
         </svg>
       );
     }
-    if (action.includes("Reply")) {
+    
+    if (actionLower.includes("reply") || actionLower.includes("respond") || actionLower.includes("answer")) {
       return (
         <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
         </svg>
       );
     }
-    if (action.includes("Task")) {
+    
+    if (actionLower.includes("task") || actionLower.includes("form") || actionLower.includes("send") || actionLower.includes("submit")) {
       return (
         <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
         </svg>
       );
     }
-    if (action.includes("Review")) {
+    
+    if (actionLower.includes("review") || actionLower.includes("read") || actionLower.includes("check")) {
       return (
         <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
           <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -118,17 +124,42 @@ const PersonList: React.FC<PersonListProps> = ({
         </svg>
       );
     }
-    if (action.includes("Waiting")) {
+    
+    if (actionLower.includes("schedule") || actionLower.includes("meeting") || actionLower.includes("call") || actionLower.includes("appointment")) {
       return (
         <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+          <path strokeLinecap="round" strokeLinejoin="round" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
         </svg>
       );
     }
+    
+    if (actionLower.includes("waiting") || actionLower.includes("pending") || actionLower.includes("follow up")) {
+      return (
+        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+      );
+    }
+    
+    // Default icon
     return (
       <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
       </svg>
+    );
+  };
+
+  // Create the JSX for action display
+  const actionDisplay = (person: Person) => {
+    if (!person.action) return null;
+    
+    return (
+      <div className="mt-2 text-xs border-t border-gray-100 pt-2 ml-10">
+        <div className="flex items-center text-amber-700 font-medium">
+          {getActionIcon(person.action)}
+          <span>{getSpecificActionText(person.action)}</span>
+        </div>
+      </div>
     );
   };
 
@@ -139,20 +170,52 @@ const PersonList: React.FC<PersonListProps> = ({
           <h2 className="text-xl font-medium text-gray-900">
             {activeTab === 'conversations' ? 'Conversations' : 'Groups'}
           </h2>
-          {activeTab === 'conversations' && (
-            <div className="relative" ref={dropdownRef}>
-              <button
-                onClick={() => onCreateNewChat()}
-                className="p-2 rounded-full text-blue-600 hover:text-blue-800 hover:bg-blue-50 focus:outline-none focus:bg-blue-100 transition duration-150"
-                aria-label="Create new conversation"
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                </svg>
-              </button>
-            </div>
-          )}
+          <div className="flex">
+            {/* Add refresh button */}
+            <button
+              onClick={handleRefresh}
+              disabled={loadingMessages}
+              title={`Last refresh: ${format(lastRefresh, 'HH:mm:ss')}`}
+              className={`p-2 rounded-full mr-1 text-gray-600 hover:text-blue-600 hover:bg-blue-50 focus:outline-none transition duration-150 ${loadingMessages ? 'opacity-50 cursor-not-allowed' : ''}`}
+              aria-label="Refresh messages"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className={`h-5 w-5 ${loadingMessages ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+            </button>
+            
+            {/* Toggle auto-refresh */}
+            <button
+              onClick={toggleAutoRefresh}
+              className={`p-2 rounded-full mr-1 focus:outline-none transition duration-150 ${isAutoRefreshEnabled ? 'text-green-600' : 'text-gray-400'}`}
+              title={isAutoRefreshEnabled ? 'Auto-refresh is ON' : 'Auto-refresh is OFF'}
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </button>
+            
+            {activeTab === 'conversations' && (
+              <div className="relative" ref={dropdownRef}>
+                <button
+                  onClick={() => onCreateNewChat()}
+                  className="p-2 rounded-full text-blue-600 hover:text-blue-800 hover:bg-blue-50 focus:outline-none focus:bg-blue-100 transition duration-150"
+                  aria-label="Create new conversation"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                  </svg>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
+        
+        {/* Last refresh indicator */}
+        <div className="mt-1 text-xs text-gray-500 text-right">
+          {loadingMessages ? 'Refreshing...' : `Last updated: ${formatDistanceToNow(lastRefresh, { addSuffix: true })}`}
+        </div>
+        
         <div className="mt-4">
           <div className="bg-gray-100 p-0.5 rounded-lg flex">
             <button 
@@ -282,14 +345,7 @@ const PersonList: React.FC<PersonListProps> = ({
                       </div>
                       
                       {/* Action row (separate) */}
-                      {person.action && (
-                        <div className="mt-2 text-xs border-t border-gray-100 pt-2 ml-10">
-                          <div className="flex items-center text-amber-700 font-medium">
-                            {getActionIcon(person.action)}
-                            <span>Action needed: {getSpecificActionText(person.action)}</span>
-                          </div>
-                        </div>
-                      )}
+                      {actionDisplay(person)}
                     </div>
                   </li>
                 ))}

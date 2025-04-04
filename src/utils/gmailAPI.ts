@@ -223,7 +223,7 @@ export const getUserProfile = async (): Promise<{email: string; name: string; pi
 /**
  * Fetch messages from Gmail
  */
-export const fetchMessages = async (pageToken?: string): Promise<{
+export const fetchMessages = async (pageToken?: string, forceRefresh?: boolean): Promise<{
   messages: EmailMessage[];
   nextPageToken?: string;
 }> => {
@@ -249,7 +249,7 @@ export const fetchMessages = async (pageToken?: string): Promise<{
         maxResults: MAX_RESULTS,
         pageToken,
         // Fetch from inbox by default to ensure we get user's emails
-        q: 'in:inbox',
+        q: forceRefresh ? 'newer_than:1d in:inbox' : 'in:inbox',
       });
     } catch (inboxError) {
       console.error('Error fetching inbox messages, trying without query:', inboxError);
@@ -554,6 +554,7 @@ export const decodeEmailBody = (body?: { data?: string }): string => {
   const sanitized = body.data.replace(/-/g, '+').replace(/_/g, '/');
   
   try {
+    // Try decoding using URI decoding approach (for UTF-8 characters)
     return decodeURIComponent(
       atob(sanitized)
         .split('')
@@ -561,8 +562,13 @@ export const decodeEmailBody = (body?: { data?: string }): string => {
         .join('')
     );
   } catch (error) {
-    console.error('Error decoding email body:', error);
-    return '';
+    // Fallback to simple decoding if URI decoding fails
+    try {
+      return atob(sanitized);
+    } catch (fallbackError) {
+      console.error('Error decoding email body:', fallbackError);
+      return '';
+    }
   }
 };
 

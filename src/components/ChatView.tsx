@@ -209,6 +209,7 @@ const ChatView: React.FC<ChatViewProps> = ({
     if (!newMessage.trim() || sendingMessage) return;
     
     try {
+      console.log('Starting to send message...');
       setSendingMessage(true);
       
       let recipient = '';
@@ -236,33 +237,47 @@ const ChatView: React.FC<ChatViewProps> = ({
       
       // Create a temporary message to display immediately
       if (userProfile) {
-        const tempMessage: EmailMessage = {
-          id: `temp_${Date.now()}`,
-          threadId: `temp_thread_${Date.now()}`,
-          labelIds: ['SENT'],
-          snippet: newMessage.substring(0, 100) + (newMessage.length > 100 ? '...' : ''),
-          payload: {
-            mimeType: 'text/plain',
-            headers: [
-              { name: 'From', value: `${userProfile.name} <${userProfile.email}>` },
-              { name: 'To', value: recipient },
-              { name: 'Subject', value: 'Re: ' + (currentPerson?.name || '') },
-              { name: 'Date', value: new Date().toISOString() },
-            ],
-            body: {
-              size: newMessage.length,
-              data: btoa(unescape(encodeURIComponent(newMessage))),
-            },
-          },
-          sizeEstimate: newMessage.length,
-          historyId: Date.now().toString(),
-          internalDate: Date.now().toString(),
-        };
+        // Safely encode the message content to prevent encoding errors
+        let encodedData;
+        try {
+          encodedData = btoa(unescape(encodeURIComponent(newMessage)));
+          console.log('Successfully encoded message data');
+        } catch (encodeError) {
+          console.error('Error encoding message:', encodeError);
+          // Continue without adding the temp message to the UI
+          encodedData = '';
+        }
         
-        // Add the temporary message to the UI
-        setDisplayMessages(prev => [...prev, tempMessage]);
+        if (encodedData) {
+          const tempMessage: EmailMessage = {
+            id: `temp_${Date.now()}`,
+            threadId: `temp_thread_${Date.now()}`,
+            labelIds: ['SENT'],
+            snippet: newMessage.substring(0, 100) + (newMessage.length > 100 ? '...' : ''),
+            payload: {
+              mimeType: 'text/plain',
+              headers: [
+                { name: 'From', value: `${userProfile.name} <${userProfile.email}>` },
+                { name: 'To', value: recipient },
+                { name: 'Subject', value: 'Re: ' + (currentPerson?.name || '') },
+                { name: 'Date', value: new Date().toISOString() },
+              ],
+              body: {
+                size: newMessage.length,
+                data: encodedData,
+              },
+            },
+            sizeEstimate: newMessage.length,
+            historyId: Date.now().toString(),
+            internalDate: Date.now().toString(),
+          };
+          
+          // Add the temporary message to the UI
+          setDisplayMessages(prev => [...prev, tempMessage]);
+        }
       }
       
+      console.log('Calling sendMessage API...');
       const success = await sendMessage(recipient, newMessage);
       
       if (success) {
@@ -270,10 +285,10 @@ const ChatView: React.FC<ChatViewProps> = ({
         setNewMessage('');
       } else {
         // Show an error message
-        console.error('Failed to send message');
+        console.error('Failed to send message - sendMessage returned false');
       }
     } catch (error) {
-      console.error('Error sending message:', error);
+      console.error('Error in handleSendMessage:', error);
     } finally {
       setSendingMessage(false);
     }
@@ -380,6 +395,13 @@ const ChatView: React.FC<ChatViewProps> = ({
     setAISuggestion("Generating suggestion...");
     
     try {
+      // First check if OpenAI API key is configured
+      if (!process.env.NEXT_PUBLIC_OPENAI_API_KEY) {
+        console.error('OpenAI API key not configured');
+        setAISuggestion("AI suggestions unavailable. Please configure your OpenAI API key.");
+        return;
+      }
+      
       // Determine prompt type for context
       let prompt = '';
       if (promptType === 'followup') {
@@ -395,11 +417,16 @@ const ChatView: React.FC<ChatViewProps> = ({
         prompt = 'responds appropriately to the conversation context';
       }
       
+      if (!sortedMessages || sortedMessages.length === 0) {
+        setAISuggestion("No message history available to generate a response from.");
+        return;
+      }
+      
       const suggestionText = await generateMessageSuggestion(sortedMessages, prompt);
       setAISuggestion(suggestionText);
     } catch (error) {
       console.error('Error generating AI suggestion:', error);
-      setAISuggestion("I'd be happy to help with your request. Please let me know if you need anything else.");
+      setAISuggestion("Sorry, I couldn't generate a suggestion at this time. Please try again later.");
     }
   };
 
