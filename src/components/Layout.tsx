@@ -818,6 +818,25 @@ const Layout: React.FC = () => {
     }
   }, [activeNavItem]);
 
+  // Get the conversation for the current person
+  const selectedConversation = useMemo(() => {
+    if (selectedView === 'conversation' && currentPerson) {
+      return conversations[currentPerson];
+    }
+    return null;
+  }, [conversations, currentPerson, selectedView]);
+  
+  // Ensure we have messages available for display
+  useEffect(() => {
+    // If we have conversations but no currentPerson is selected,
+    // automatically select the first conversation
+    if (Object.keys(conversations).length > 0 && !currentPerson) {
+      const firstPersonEmail = Object.keys(conversations)[0];
+      console.log('Auto-selecting conversation:', firstPersonEmail);
+      selectPerson(firstPersonEmail);
+    }
+  }, [conversations, currentPerson, selectPerson]);
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-100">
@@ -838,9 +857,6 @@ const Layout: React.FC = () => {
 
   // Convert conversations object to array of people for PersonList
   const peopleArray = Object.values(conversations).map(conversation => conversation.person);
-
-  // Get the selected conversation if there's a currentPerson
-  const selectedConversation = currentPerson ? conversations[currentPerson] : null;
 
   // Handle creating a new message
   const handleSendNewMessage = async (e: React.FormEvent) => {
@@ -1333,8 +1349,8 @@ const Layout: React.FC = () => {
                           {contact.name.charAt(0).toUpperCase()}
                         </div>
                         <div className="ml-3">
-                          <p className="text-sm font-medium text-gray-900">{contact.name}</p>
-                          <p className="text-xs text-gray-500">{contact.primaryEmail}</p>
+                          <p className="text-sm font-medium text-gray-900 truncate">{contact.name}</p>
+                          <p className="text-xs text-gray-500 truncate">{contact.primaryEmail}</p>
                           {contact.company && (
                             <p className="text-xs text-gray-500">{contact.company}</p>
                           )}
@@ -1429,6 +1445,152 @@ const Layout: React.FC = () => {
     </div>
   );
 
+  // Enhance the DebugTools component for better debugging
+  const DebugTools = () => {
+    const { 
+      isAuthenticated, 
+      userProfile, 
+      conversations,
+      error
+    } = useGmail();
+    
+    const [debugOutput, setDebugOutput] = useState<string>('');
+    
+    // Function to test direct API access
+    const testDirectApiAccess = async () => {
+      try {
+        setDebugOutput('Testing direct API access...');
+        
+        // Check if we have a token in session storage
+        const token = sessionStorage.getItem('gmail_access_token');
+        setDebugOutput(prev => prev + `\nToken exists: ${!!token}`);
+        
+        if (!token) {
+          setDebugOutput(prev => prev + '\nNo token found in session storage. Please sign in first.');
+          return;
+        }
+        
+        // Set the token manually
+        gapi.client.setToken({ access_token: token });
+        
+        // Try a simple API call directly
+        setDebugOutput(prev => prev + '\nTesting API with userinfo endpoint...');
+        try {
+          const userInfoResponse = await gapi.client.request({
+            path: 'https://www.googleapis.com/userinfo/v2/me',
+          });
+          setDebugOutput(prev => prev + `\nUserInfo success! Email: ${JSON.parse(userInfoResponse.body).email}`);
+        } catch (userInfoError) {
+          setDebugOutput(prev => prev + `\nUserInfo failed: ${JSON.stringify(userInfoError)}`);
+        }
+        
+        // Try to list Gmail labels
+        setDebugOutput(prev => prev + '\nTesting Gmail API with labels endpoint...');
+        try {
+          const labelsResponse = await gapi.client.gmail.users.labels.list({
+            userId: 'me'
+          });
+          const labels = labelsResponse.result.labels || [];
+          setDebugOutput(prev => prev + `\nLabels success! Found ${labels.length} labels.`);
+          
+          // Show a few labels
+          if (labels.length > 0) {
+            setDebugOutput(prev => prev + `\nFirst few labels: ${labels.slice(0, 3).map(l => l.name).join(', ')}...`);
+          }
+        } catch (labelsError) {
+          setDebugOutput(prev => prev + `\nLabels request failed: ${JSON.stringify(labelsError)}`);
+        }
+        
+        // Try to list messages
+        setDebugOutput(prev => prev + '\nTesting Gmail API with messages endpoint...');
+        try {
+          const messagesResponse = await gapi.client.gmail.users.messages.list({
+            userId: 'me',
+            maxResults: 3
+          });
+          const messages = messagesResponse.result.messages || [];
+          setDebugOutput(prev => prev + `\nMessages success! Found ${messages.length} messages.`);
+          
+          // Try to get one message
+          if (messages.length > 0) {
+            const messageId = messages[0].id;
+            if (messageId) {
+              setDebugOutput(prev => prev + `\nFetching details for message: ${messageId}`);
+              
+              try {
+                const messageResponse = await gapi.client.gmail.users.messages.get({
+                  userId: 'me',
+                  id: messageId,
+                  format: 'full'
+                });
+                
+                const headers = messageResponse.result.payload?.headers || [];
+                const subjectHeader = headers.find(h => h.name === 'Subject');
+                const fromHeader = headers.find(h => h.name === 'From');
+                
+                setDebugOutput(prev => prev + 
+                  `\nMessage details: Subject: ${subjectHeader?.value || 'Unknown'}, From: ${fromHeader?.value || 'Unknown'}`);
+              } catch (messageError) {
+                setDebugOutput(prev => prev + `\nMessage details request failed: ${JSON.stringify(messageError)}`);
+              }
+            } else {
+              setDebugOutput(prev => prev + `\nMessage ID is undefined`);
+            }
+          }
+        } catch (messagesError) {
+          setDebugOutput(prev => prev + `\nMessages request failed: ${JSON.stringify(messagesError)}`);
+        }
+      } catch (error) {
+        setDebugOutput(prev => prev + `\nError during API testing: ${JSON.stringify(error)}`);
+      }
+    };
+    
+    // Function to clear debug output
+    const clearDebugOutput = () => {
+      setDebugOutput('');
+    };
+    
+    return (
+      <div className="p-2 bg-gray-100 border-t">
+        <div className="flex justify-between items-center mb-1">
+          <p className="text-xs text-gray-500">Debug Tools</p>
+          <p className="text-xs text-gray-500">
+            {userProfile ? (
+              <span>Signed in as: {userProfile.email}</span>
+            ) : (
+              <span>Not signed in</span>
+            )}
+            <span className="ml-2">
+              Conversations: {Object.keys(conversations).length}
+            </span>
+            {error && <span className="ml-2 text-red-500">Error: {error}</span>}
+          </p>
+        </div>
+        
+        <div className="flex space-x-2 mb-2">
+          <button 
+            onClick={testDirectApiAccess}
+            className="px-2 py-1 bg-blue-500 text-white text-xs rounded hover:bg-blue-600"
+          >
+            Test Direct API
+          </button>
+          <button 
+            onClick={clearDebugOutput}
+            className="px-2 py-1 bg-gray-500 text-white text-xs rounded hover:bg-gray-600"
+          >
+            Clear Output
+          </button>
+        </div>
+        
+        {debugOutput && (
+          <div className="mt-2 p-2 bg-black text-white text-xs font-mono whitespace-pre-wrap rounded" style={{ maxHeight: '200px', overflow: 'auto' }}>
+            {debugOutput}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="h-screen flex flex-col bg-gray-100">
       {/* Header */}
@@ -1495,6 +1657,7 @@ const Layout: React.FC = () => {
           {activeNavItem === 'settings' && <SettingsView />}
         </div>
       </main>
+      <DebugTools />
     </div>
   );
 };

@@ -41,13 +41,20 @@ const ChatView: React.FC<ChatViewProps> = ({
   const aiHelperRef = useRef<HTMLDivElement>(null);
   const notesTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   
-  // Predefined message templates
-  const messageTemplates = [
-    { name: "Follow-up", content: "Hi, I wanted to follow up on our previous conversation. Any updates on this?" },
-    { name: "Thank You", content: "Thank you for your message. I appreciate your time and will get back to you shortly." },
-    { name: "Meeting Request", content: "I'd like to schedule a meeting to discuss this further. Are you available sometime this week?" },
-    { name: "Payment Reminder", content: "Just a friendly reminder that payment for invoice #XXXX is due on DATE. Please let me know if you have any questions." }
-  ];
+  // Add state for editable templates
+  const [messageTemplates, setMessageTemplates] = useState<Array<{id: string, name: string, content: string}>>([
+    { id: '1', name: "Follow-up", content: "Hi, I wanted to follow up on our previous conversation. Any updates on this?" },
+    { id: '2', name: "Thank You", content: "Thank you for your message. I appreciate your time and will get back to you shortly." },
+    { id: '3', name: "Meeting Request", content: "I'd like to schedule a meeting to discuss this further. Are you available sometime this week?" },
+    { id: '4', name: "Payment Reminder", content: "Just a friendly reminder that payment for invoice #XXXX is due on DATE. Please let me know if you have any questions." }
+  ]);
+  
+  // Template editing states
+  const [isEditingTemplate, setIsEditingTemplate] = useState(false);
+  const [editTemplateId, setEditTemplateId] = useState<string | null>(null);
+  const [templateName, setTemplateName] = useState('');
+  const [templateContent, setTemplateContent] = useState('');
+  const [isAddingTemplate, setIsAddingTemplate] = useState(false);
   
   // Predefined statuses for influencer marketing
   const predefinedStatuses = [
@@ -58,6 +65,19 @@ const ChatView: React.FC<ChatViewProps> = ({
     'Rejected',
     'Pending Revisions'
   ];
+
+  // Load templates from localStorage on first render
+  useEffect(() => {
+    const savedTemplates = localStorage.getItem('messageTemplates');
+    if (savedTemplates) {
+      setMessageTemplates(JSON.parse(savedTemplates));
+    }
+  }, []);
+
+  // Save templates to localStorage whenever they change
+  useEffect(() => {
+    localStorage.setItem('messageTemplates', JSON.stringify(messageTemplates));
+  }, [messageTemplates]);
 
   // Load notes for the current person
   useEffect(() => {
@@ -244,17 +264,94 @@ const ChatView: React.FC<ChatViewProps> = ({
     setShowTemplatesPopup(false);
   };
 
+  const handleEditTemplate = (template: {id: string, name: string, content: string}) => {
+    setEditTemplateId(template.id);
+    setTemplateName(template.name);
+    setTemplateContent(template.content);
+    setIsEditingTemplate(true);
+    setIsAddingTemplate(false);
+  };
+
+  const handleDeleteTemplate = (id: string) => {
+    setMessageTemplates(prev => prev.filter(template => template.id !== id));
+  };
+
+  const handleSaveTemplate = () => {
+    if (!templateName.trim() || !templateContent.trim()) return;
+
+    if (isAddingTemplate) {
+      // Add new template
+      const newTemplate = {
+        id: Date.now().toString(),
+        name: templateName,
+        content: templateContent
+      };
+      setMessageTemplates(prev => [...prev, newTemplate]);
+    } else if (editTemplateId) {
+      // Update existing template
+      setMessageTemplates(prev => 
+        prev.map(template => 
+          template.id === editTemplateId 
+            ? { ...template, name: templateName, content: templateContent }
+            : template
+        )
+      );
+    }
+
+    // Reset form
+    setIsEditingTemplate(false);
+    setIsAddingTemplate(false);
+    setEditTemplateId(null);
+    setTemplateName('');
+    setTemplateContent('');
+  };
+
+  const handleAddNewTemplate = () => {
+    setIsAddingTemplate(true);
+    setIsEditingTemplate(true);
+    setEditTemplateId(null);
+    setTemplateName('');
+    setTemplateContent('');
+  };
+
+  const handleCancelTemplateEdit = () => {
+    setIsEditingTemplate(false);
+    setIsAddingTemplate(false);
+    setEditTemplateId(null);
+    setTemplateName('');
+    setTemplateContent('');
+  };
+
   const generateAISuggestion = () => {
-    // In a real app, this would call an AI service
-    // For now, just simulate with a simple response
+    // In a real app, this would call an AI API
+    // For now, we'll simulate it with pre-defined responses
     const suggestions = [
-      "Based on the conversation, I suggest following up on the deadline mentioned earlier.",
-      "You might want to clarify the details about the meeting time.",
-      "Consider asking for more information about the project requirements.",
-      "A friendly reminder about the pending decision might be appropriate."
+      "Thank you for reaching out. I've reviewed your proposal and think it looks promising.",
+      "I appreciate your detailed explanation. Let me get back to you with a more comprehensive response soon.",
+      "This sounds like a great opportunity. Could we schedule a quick call to discuss the details?",
+      "Thank you for the information. I've forwarded it to the relevant team and will update you once I hear back.",
+      "A friendly reminder about the pending decision might be appropriate.",
+      "I completely understand your concerns. Let's find a solution that works for both of us."
     ];
-    const randomSuggestion = suggestions[Math.floor(Math.random() * suggestions.length)];
-    return randomSuggestion;
+    
+    // Get message context from the current conversation
+    let contextHint = '';
+    if (messages.length > 0) {
+      const lastMessageSnippet = messages[messages.length - 1].snippet.toLowerCase();
+      
+      if (lastMessageSnippet.includes('meeting') || lastMessageSnippet.includes('schedule') || lastMessageSnippet.includes('call')) {
+        contextHint = "I'm available on Tuesday afternoon or Wednesday morning for a call. Would either of those times work for you?";
+      } else if (lastMessageSnippet.includes('price') || lastMessageSnippet.includes('cost') || lastMessageSnippet.includes('quote')) {
+        contextHint = "I've reviewed our pricing structure and can offer the package at $X. This includes all the features we discussed.";
+      } else if (lastMessageSnippet.includes('deadline') || lastMessageSnippet.includes('when') || lastMessageSnippet.includes('timeline')) {
+        contextHint = "I expect to have this completed by the end of next week. I'll send you a progress update on Monday.";
+      }
+    }
+
+    // If we have a context hint, use it, otherwise randomize
+    const randomSuggestion = contextHint || suggestions[Math.floor(Math.random() * suggestions.length)];
+    setAiSuggestion(randomSuggestion);
+    setShowAIHelper(true);
   };
 
   const applyAISuggestion = () => {
@@ -368,20 +465,99 @@ const ChatView: React.FC<ChatViewProps> = ({
                   <div 
                     id="templates-popup"
                     className="absolute bottom-full mb-2 left-0 p-2 bg-white border rounded-lg shadow-lg w-64 z-10"
+                    ref={templatesRef}
                   >
-                    <div className="text-xs font-semibold text-gray-700 mb-2 pb-1 border-b">
-                      Message Templates
-                    </div>
-                    {messageTemplates.map((template, index) => (
+                    <div className="flex justify-between items-center mb-2 pb-1 border-b">
+                      <div className="text-xs font-semibold text-gray-700">
+                        Message Templates
+                      </div>
                       <button
-                        key={index}
                         type="button"
-                        className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-md"
-                        onClick={() => handleTemplateSelect(template.content)}
+                        className="text-xs text-blue-600 hover:text-blue-800"
+                        onClick={handleAddNewTemplate}
                       >
-                        {template.name}
+                        Add New
                       </button>
-                    ))}
+                    </div>
+
+                    {isEditingTemplate ? (
+                      <div className="p-2">
+                        <input
+                          type="text"
+                          className="w-full p-2 mb-2 text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+                          placeholder="Template name"
+                          value={templateName}
+                          onChange={(e) => setTemplateName(e.target.value)}
+                        />
+                        <textarea
+                          className="w-full p-2 mb-2 text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 min-h-[80px]"
+                          placeholder="Template content"
+                          value={templateContent}
+                          onChange={(e) => setTemplateContent(e.target.value)}
+                        />
+                        <div className="flex justify-end space-x-2">
+                          <button
+                            type="button"
+                            className="text-xs text-gray-600 hover:text-gray-800 px-2 py-1"
+                            onClick={handleCancelTemplateEdit}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            className="text-xs text-white bg-blue-500 hover:bg-blue-600 px-2 py-1 rounded"
+                            onClick={handleSaveTemplate}
+                          >
+                            Save
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        {messageTemplates.length === 0 ? (
+                          <div className="text-sm text-gray-500 text-center py-2">
+                            No templates available
+                          </div>
+                        ) : (
+                          messageTemplates.map((template) => (
+                            <div 
+                              key={template.id}
+                              className="relative group px-3 py-2 hover:bg-gray-50 rounded-md"
+                            >
+                              <div className="flex justify-between items-center">
+                                <button
+                                  type="button"
+                                  className="w-full text-left text-sm text-gray-700"
+                                  onClick={() => handleTemplateSelect(template.content)}
+                                >
+                                  {template.name}
+                                </button>
+                                <div className="hidden group-hover:flex space-x-1">
+                                  <button
+                                    type="button"
+                                    className="text-gray-400 hover:text-blue-600"
+                                    onClick={() => handleEditTemplate(template)}
+                                  >
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                                    </svg>
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="text-gray-400 hover:text-red-600"
+                                    onClick={() => handleDeleteTemplate(template.id)}
+                                  >
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                    </svg>
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          ))
+                        )}
+                      </>
+                    )}
                   </div>
                 )}
               </div>
@@ -403,25 +579,39 @@ const ChatView: React.FC<ChatViewProps> = ({
                 {showAIHelper && aiSuggestion && (
                   <div 
                     id="ai-popup"
-                    className="absolute bottom-full mb-2 right-0 p-3 bg-blue-50 border border-blue-200 rounded-lg shadow-lg w-64 z-10"
+                    className="absolute bottom-full mb-2 right-0 p-3 bg-blue-50 border border-blue-200 rounded-lg shadow-lg w-80 z-10"
                   >
-                    <div className="text-xs font-semibold text-blue-600 mb-1">AI Suggestion:</div>
+                    <div className="flex items-center text-xs font-semibold text-blue-600 mb-1">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                      </svg>
+                      AI Suggestion
+                    </div>
                     <p className="text-sm text-gray-700 mb-2">{aiSuggestion}</p>
-                    <div className="flex justify-end space-x-2">
+                    <div className="flex justify-between items-center">
                       <button
                         type="button"
-                        className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1"
-                        onClick={() => setShowAIHelper(false)}
+                        className="text-xs text-blue-600 hover:text-blue-800 px-2 py-1"
+                        onClick={generateAISuggestion}
                       >
-                        Dismiss
+                        Try Another
                       </button>
-                      <button
-                        type="button"
-                        className="text-xs text-white bg-blue-500 hover:bg-blue-600 px-2 py-1 rounded transition-colors duration-150"
-                        onClick={applyAISuggestion}
-                      >
-                        Use
-                      </button>
+                      <div className="flex space-x-2">
+                        <button
+                          type="button"
+                          className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1"
+                          onClick={() => setShowAIHelper(false)}
+                        >
+                          Dismiss
+                        </button>
+                        <button
+                          type="button"
+                          className="text-xs text-white bg-blue-500 hover:bg-blue-600 px-2 py-1 rounded transition-colors duration-150"
+                          onClick={applyAISuggestion}
+                        >
+                          Use
+                        </button>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -678,20 +868,99 @@ const ChatView: React.FC<ChatViewProps> = ({
                     <div 
                       id="templates-popup"
                       className="absolute bottom-full mb-2 left-0 p-2 bg-white border rounded-lg shadow-lg w-64 z-10"
+                      ref={templatesRef}
                     >
-                      <div className="text-xs font-semibold text-gray-700 mb-2 pb-1 border-b">
-                        Message Templates
-                      </div>
-                      {messageTemplates.map((template, index) => (
+                      <div className="flex justify-between items-center mb-2 pb-1 border-b">
+                        <div className="text-xs font-semibold text-gray-700">
+                          Message Templates
+                        </div>
                         <button
-                          key={index}
                           type="button"
-                          className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-md"
-                          onClick={() => handleTemplateSelect(template.content)}
+                          className="text-xs text-blue-600 hover:text-blue-800"
+                          onClick={handleAddNewTemplate}
                         >
-                          {template.name}
+                          Add New
                         </button>
-                      ))}
+                      </div>
+
+                      {isEditingTemplate ? (
+                        <div className="p-2">
+                          <input
+                            type="text"
+                            className="w-full p-2 mb-2 text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500"
+                            placeholder="Template name"
+                            value={templateName}
+                            onChange={(e) => setTemplateName(e.target.value)}
+                          />
+                          <textarea
+                            className="w-full p-2 mb-2 text-sm border rounded focus:outline-none focus:ring-1 focus:ring-blue-500 min-h-[80px]"
+                            placeholder="Template content"
+                            value={templateContent}
+                            onChange={(e) => setTemplateContent(e.target.value)}
+                          />
+                          <div className="flex justify-end space-x-2">
+                            <button
+                              type="button"
+                              className="text-xs text-gray-600 hover:text-gray-800 px-2 py-1"
+                              onClick={handleCancelTemplateEdit}
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              className="text-xs text-white bg-blue-500 hover:bg-blue-600 px-2 py-1 rounded"
+                              onClick={handleSaveTemplate}
+                            >
+                              Save
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          {messageTemplates.length === 0 ? (
+                            <div className="text-sm text-gray-500 text-center py-2">
+                              No templates available
+                            </div>
+                          ) : (
+                            messageTemplates.map((template) => (
+                              <div 
+                                key={template.id}
+                                className="relative group px-3 py-2 hover:bg-gray-50 rounded-md"
+                              >
+                                <div className="flex justify-between items-center">
+                                  <button
+                                    type="button"
+                                    className="w-full text-left text-sm text-gray-700"
+                                    onClick={() => handleTemplateSelect(template.content)}
+                                  >
+                                    {template.name}
+                                  </button>
+                                  <div className="hidden group-hover:flex space-x-1">
+                                    <button
+                                      type="button"
+                                      className="text-gray-400 hover:text-blue-600"
+                                      onClick={() => handleEditTemplate(template)}
+                                    >
+                                      <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+                                      </svg>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="text-gray-400 hover:text-red-600"
+                                      onClick={() => handleDeleteTemplate(template.id)}
+                                    >
+                                      <svg xmlns="http://www.w3.org/2000/svg" className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                      </svg>
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            ))
+                          )}
+                        </>
+                      )}
                     </div>
                   )}
                 </div>
@@ -713,25 +982,39 @@ const ChatView: React.FC<ChatViewProps> = ({
                   {showAIHelper && aiSuggestion && (
                     <div 
                       id="ai-popup"
-                      className="absolute bottom-full mb-2 right-0 p-3 bg-blue-50 border border-blue-200 rounded-lg shadow-lg w-64 z-10"
+                      className="absolute bottom-full mb-2 right-0 p-3 bg-blue-50 border border-blue-200 rounded-lg shadow-lg w-80 z-10"
                     >
-                      <div className="text-xs font-semibold text-blue-600 mb-1">AI Suggestion:</div>
+                      <div className="flex items-center text-xs font-semibold text-blue-600 mb-1">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                        </svg>
+                        AI Suggestion
+                      </div>
                       <p className="text-sm text-gray-700 mb-2">{aiSuggestion}</p>
-                      <div className="flex justify-end space-x-2">
+                      <div className="flex justify-between items-center">
                         <button
                           type="button"
-                          className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1"
-                          onClick={() => setShowAIHelper(false)}
+                          className="text-xs text-blue-600 hover:text-blue-800 px-2 py-1"
+                          onClick={generateAISuggestion}
                         >
-                          Dismiss
+                          Try Another
                         </button>
-                        <button
-                          type="button"
-                          className="text-xs text-white bg-blue-500 hover:bg-blue-600 px-2 py-1 rounded transition-colors duration-150"
-                          onClick={applyAISuggestion}
-                        >
-                          Use
-                        </button>
+                        <div className="flex space-x-2">
+                          <button
+                            type="button"
+                            className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1"
+                            onClick={() => setShowAIHelper(false)}
+                          >
+                            Dismiss
+                          </button>
+                          <button
+                            type="button"
+                            className="text-xs text-white bg-blue-500 hover:bg-blue-600 px-2 py-1 rounded transition-colors duration-150"
+                            onClick={applyAISuggestion}
+                          >
+                            Use
+                          </button>
+                        </div>
                       </div>
                     </div>
                   )}

@@ -1,33 +1,106 @@
 import { EmailMessage, EmailHeader, Person, Conversation } from '../types';
 
+// Add global type declarations
+declare global {
+  interface Window {
+    google: {
+      accounts: {
+        oauth2: {
+          initTokenClient: (config: any) => any;
+          revoke: (token: string, callback: () => void) => void;
+        }
+      }
+    }
+  }
+}
+
 // API Configuration
-const SCOPES = [
-  'https://www.googleapis.com/auth/gmail.readonly',
-  'https://www.googleapis.com/auth/userinfo.email',
-  'https://www.googleapis.com/auth/userinfo.profile',
-];
+const SCOPES = process.env.NEXT_PUBLIC_GMAIL_SCOPES ? 
+  process.env.NEXT_PUBLIC_GMAIL_SCOPES.split(',') : 
+  [
+    'https://www.googleapis.com/auth/gmail.readonly',
+    'https://www.googleapis.com/auth/userinfo.email',
+    'https://www.googleapis.com/auth/userinfo.profile',
+    'https://www.googleapis.com/auth/gmail.send',
+  ];
 
 // Maximum results to fetch per API call
 const MAX_RESULTS = 50;
+
+// Store the token client globally
+let tokenClient: any = null;
 
 /**
  * Load the Gmail API client library
  */
 export const loadGmailApi = async (): Promise<void> => {
   return new Promise((resolve, reject) => {
-    gapi.load('client:auth2', async () => {
-      try {
-        await gapi.client.init({
-          apiKey: process.env.NEXT_PUBLIC_GOOGLE_API_KEY,
-          clientId: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID,
-          discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest'],
-          scope: SCOPES.join(' '),
-        });
-        resolve();
-      } catch (error) {
-        reject(error);
-      }
-    });
+    try {
+      console.log('Loading Gmail API client library...');
+      gapi.load('client', async () => {
+        try {
+          console.log('Initializing GAPI client with API key:', process.env.NEXT_PUBLIC_GOOGLE_API_KEY?.substring(0, 5) + '...');
+          
+          // Initialize the GAPI client
+          await gapi.client.init({
+            apiKey: process.env.NEXT_PUBLIC_GOOGLE_API_KEY || '',
+            discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/gmail/v1/rest'],
+          });
+          
+          console.log('GAPI client initialized successfully');
+          console.log('Initializing token client with client ID:', process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID?.substring(0, 10) + '...');
+          console.log('Using scopes:', SCOPES.join(' '));
+          
+          // Initialize the token client
+          tokenClient = window.google.accounts.oauth2.initTokenClient({
+            client_id: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID || '',
+            scope: SCOPES.join(' '),
+            prompt: 'consent',
+            callback: (response: any) => {
+              console.log('Token client callback triggered');
+              if (response && 'error' in response) {
+                console.error('Auth error:', response.error);
+                reject(response);
+                return;
+              }
+              
+              if (response && 'access_token' in response) {
+                // Store the access token in session storage
+                sessionStorage.setItem('gmail_access_token', response.access_token);
+                console.log('Access token stored in session storage');
+                
+                // Set the token for API requests
+                gapi.client.setToken(response as any);
+                console.log('Token set for API requests');
+                
+                resolve();
+              } else {
+                console.error('No access token in response');
+                reject(new Error('No access token received'));
+              }
+            }
+          });
+          
+          // We only initialize the client here, but don't request tokens yet
+          // That will happen in the signIn method
+          console.log('Token client initialized successfully');
+          resolve();
+        } catch (error) {
+          console.error('Error initializing GAPI client:', error);
+          
+          // Log more specific error details
+          if (error instanceof Error) {
+            console.error('Error message:', error.message);
+            console.error('Error stack:', error.stack);
+          }
+          
+          reject(error);
+        }
+      });
+    } catch (error) {
+      console.error('Error loading GAPI client library:', error);
+      reject(error);
+    }
   });
 };
 
@@ -35,37 +108,116 @@ export const loadGmailApi = async (): Promise<void> => {
  * Check if a user is currently signed in
  */
 export const isUserSignedIn = (): boolean => {
-  return gapi.auth2?.getAuthInstance()?.isSignedIn?.get() || false;
+  // Check if we have an access token in session storage
+  const hasToken = !!sessionStorage.getItem('gmail_access_token');
+  console.log('Checking if user is signed in:', hasToken);
+  return hasToken;
 };
 
 /**
  * Sign in the user to Gmail
  */
 export const signIn = async (): Promise<void> => {
-  await gapi.auth2.getAuthInstance().signIn();
+  return new Promise((resolve, reject) => {
+    if (!tokenClient) {
+      console.error('Token client not initialized');
+      reject(new Error('Token client not initialized'));
+      return;
+    }
+    
+    console.log('Starting Gmail sign-in process...');
+    
+    // Clear any existing token to force a fresh login
+    sessionStorage.removeItem('gmail_access_token');
+    gapi.client.setToken(null as any);
+    
+    // Use the callback already set in loadGmailApi
+    // This callback will either resolve or reject the promise
+    console.log('Requesting access token with prompt:consent');
+    
+    try {
+      tokenClient.requestAccessToken({ 
+        prompt: 'consent',
+        hint: '' // Empty hint to show account selector
+      });
+      
+      // The promise will be resolved in the callback
+      // This is just to handle cases where requestAccessToken doesn't throw but also doesn't call the callback
+      setTimeout(() => {
+        // If we get here and there's still no token, something went wrong
+        if (!sessionStorage.getItem('gmail_access_token')) {
+          console.warn('Sign-in timeout - no callback received');
+          reject(new Error('Sign-in timeout - no callback received'));
+        }
+      }, 60000); // 60 second timeout
+    } catch (error) {
+      console.error('Error requesting access token:', error);
+      reject(error);
+    }
+  });
 };
 
 /**
  * Sign out the user from Gmail
  */
 export const signOut = async (): Promise<void> => {
-  await gapi.auth2.getAuthInstance().signOut();
+  const token = sessionStorage.getItem('gmail_access_token');
+  if (token) {
+    window.google.accounts.oauth2.revoke(token, () => {
+      sessionStorage.removeItem('gmail_access_token');
+      gapi.client.setToken(null as any);
+    });
+  }
 };
 
 /**
  * Get the user's Gmail profile info
  */
 export const getUserProfile = async (): Promise<{email: string; name: string; picture?: string}> => {
-  const response = await gapi.client.request({
-    path: 'https://www.googleapis.com/userinfo/v2/me',
-  });
-  
-  const profile = JSON.parse(response.body);
-  return {
-    email: profile.email,
-    name: profile.name,
-    picture: profile.picture,
-  };
+  try {
+    console.log('Fetching user profile...');
+    
+    // Ensure we have a token set
+    const token = sessionStorage.getItem('gmail_access_token');
+    if (!token) {
+      console.error('No access token found when trying to get user profile');
+      throw new Error('No access token available');
+    }
+    
+    // Make sure the token is set for this request
+    gapi.client.setToken({ access_token: token });
+    
+    // Make the request to get user profile
+    const response = await gapi.client.request({
+      path: 'https://www.googleapis.com/userinfo/v2/me',
+    });
+    
+    console.log('User profile response:', response);
+    
+    if (response.status !== 200) {
+      console.error('Error fetching user profile:', response);
+      throw new Error(`Failed to fetch profile: ${response.status}`);
+    }
+    
+    const profile = JSON.parse(response.body);
+    console.log('Successfully fetched user profile:', profile.email);
+    
+    return {
+      email: profile.email,
+      name: profile.name || profile.email,
+      picture: profile.picture,
+    };
+  } catch (error) {
+    console.error('Failed to get user profile:', error);
+    
+    // If we get a 401 error, the token is invalid
+    if (error && typeof error === 'object' && 'status' in error && error.status === 401) {
+      console.log('Token appears to be invalid (401 error), clearing session');
+      sessionStorage.removeItem('gmail_access_token');
+    }
+    
+    throw error;
+  }
 };
 
 /**
@@ -76,22 +228,59 @@ export const fetchMessages = async (pageToken?: string): Promise<{
   nextPageToken?: string;
 }> => {
   try {
-    // First, get message IDs
-    const listResponse = await gapi.client.gmail.users.messages.list({
-      userId: 'me',
-      maxResults: MAX_RESULTS,
-      pageToken,
-      // Filter out categories if needed
-      // q: 'category:primary',
-    });
+    console.log('Fetching messages from Gmail API...');
+    
+    // Ensure we have a token set
+    const token = sessionStorage.getItem('gmail_access_token');
+    if (!token) {
+      console.error('No access token found when trying to fetch messages');
+      throw new Error('No access token available');
+    }
+    
+    // Make sure the token is set for this request
+    gapi.client.setToken({ access_token: token });
+    
+    // First, try with inbox query
+    let listResponse;
+    try {
+      // First, get message IDs
+      listResponse = await gapi.client.gmail.users.messages.list({
+        userId: 'me',
+        maxResults: MAX_RESULTS,
+        pageToken,
+        // Fetch from inbox by default to ensure we get user's emails
+        q: 'in:inbox',
+      });
+    } catch (inboxError) {
+      console.error('Error fetching inbox messages, trying without query:', inboxError);
+      
+      // If inbox query fails, try without any query
+      listResponse = await gapi.client.gmail.users.messages.list({
+        userId: 'me',
+        maxResults: MAX_RESULTS,
+        pageToken
+      });
+    }
 
+    console.log('List response received:', listResponse);
+    
+    // Check if we have a valid response
+    if (!listResponse || !listResponse.result) {
+      console.error('Invalid response from Gmail API:', listResponse);
+      return { messages: [] };
+    }
+    
     const messageIds = listResponse.result.messages || [];
     
+    console.log(`Found ${messageIds.length} message IDs`);
+    
     if (!messageIds.length) {
+      console.log('No messages found in Gmail account');
       return { messages: [] };
     }
 
     // Then batch get full messages
+    console.log('Fetching full message details...');
     const messages = await Promise.all(
       messageIds.map(async (message) => {
         if (!message.id) {
@@ -108,12 +297,26 @@ export const fetchMessages = async (pageToken?: string): Promise<{
       })
     );
 
+    console.log(`Successfully fetched ${messages.length} full messages`);
     return {
       messages,
       nextPageToken: listResponse.result.nextPageToken || undefined,
     };
   } catch (error) {
     console.error('Error fetching messages:', error);
+    // Add more detailed error logging
+    if (error instanceof Error) {
+      console.error('Error message:', error.message);
+      console.error('Error stack:', error.stack);
+    } else if (typeof error === 'object' && error !== null) {
+      console.error('Error details:', JSON.stringify(error));
+      
+      // If we get a 401 error, the token is invalid
+      if ('status' in error && error.status === 401) {
+        console.log('Token appears to be invalid (401 error), clearing session');
+        sessionStorage.removeItem('gmail_access_token');
+      }
+    }
     throw error;
   }
 };
@@ -122,31 +325,58 @@ export const fetchMessages = async (pageToken?: string): Promise<{
  * Parse email headers to extract sender or primary recipient
  */
 export const extractPersonFromHeaders = (headers: EmailHeader[], userEmail: string): Person | null => {
+  console.log('Extracting person from headers for message, user email:', userEmail);
+  
   const fromHeader = headers.find(header => header.name.toLowerCase() === 'from');
   const toHeader = headers.find(header => header.name.toLowerCase() === 'to');
   const subjectHeader = headers.find(header => header.name.toLowerCase() === 'subject');
   const dateHeader = headers.find(header => header.name.toLowerCase() === 'date');
   
-  let emailMatch;
   let person: Person | null = null;
   
   // Function to parse email address from header value
   const parseEmail = (headerValue: string): { email: string; name?: string } => {
-    // Extract name and email from format: "Name <email@example.com>" or just "email@example.com"
-    const match = headerValue.match(/"?([^"<]+)"?\s*<?([^>]*)>?/);
+    console.log('Parsing email from header value:', headerValue);
     
-    if (match && match[2]) {
-      return {
-        name: match[1].trim(),
-        email: match[2].trim(),
-      };
-    } else {
-      return {
-        email: headerValue.trim(),
-      };
+    // Handle multiple formats:
+    // - "Name <email@example.com>"
+    // - "email@example.com (Name)"
+    // - "email@example.com"
+    
+    // Format: "Name <email@example.com>"
+    const angleFormat = headerValue.match(/([^<]+)<([^>]+)>/);
+    if (angleFormat) {
+      const name = angleFormat[1].trim();
+      const email = angleFormat[2].trim();
+      console.log('Extracted using angle format:', { name, email });
+      return { name, email };
     }
+    
+    // Format: "email@example.com (Name)"
+    const parenthesisFormat = headerValue.match(/([^\s]+)\s*\(([^)]+)\)/);
+    if (parenthesisFormat) {
+      const email = parenthesisFormat[1].trim();
+      const name = parenthesisFormat[2].trim();
+      console.log('Extracted using parenthesis format:', { name, email });
+      return { name, email };
+    }
+    
+    // Just an email
+    // Look for any text that looks like an email address
+    const emailRegex = /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/;
+    const emailMatch = headerValue.match(emailRegex);
+    if (emailMatch) {
+      const email = emailMatch[1].trim();
+      console.log('Extracted using regex format:', { email });
+      return { email };
+    }
+    
+    // Fallback: just use the whole string as the email
+    console.log('Using fallback format:', { email: headerValue.trim() });
+    return { email: headerValue.trim() };
   };
   
+  // First try to extract from the From header if present
   if (fromHeader) {
     const parsedFrom = parseEmail(fromHeader.value);
     
@@ -159,6 +389,7 @@ export const extractPersonFromHeaders = (headers: EmailHeader[], userEmail: stri
         lastMessageSnippet: subjectHeader?.value || '',
         unreadCount: 0,
       };
+      console.log('Created person from FROM header:', person);
     }
   }
   
@@ -179,6 +410,7 @@ export const extractPersonFromHeaders = (headers: EmailHeader[], userEmail: stri
           lastMessageSnippet: subjectHeader?.value || '',
           unreadCount: 0,
         };
+        console.log('Created person from TO header:', person);
         break;
       }
     }
@@ -194,7 +426,9 @@ export const groupMessagesByPerson = (
   messages: EmailMessage[],
   userEmail: string
 ): Record<string, Conversation> => {
+  console.log(`Grouping ${messages.length} messages by person for user: ${userEmail}`);
   const conversations: Record<string, Conversation> = {};
+  let ungroupedCount = 0;
   
   messages.forEach(message => {
     const person = extractPersonFromHeaders(message.payload.headers, userEmail);
@@ -210,8 +444,35 @@ export const groupMessagesByPerson = (
       }
       
       conversations[personEmail].messages.push(message);
+    } else {
+      // Handle messages where we couldn't identify a sender/recipient
+      ungroupedCount++;
+      
+      // Try to get subject and use that as identifier
+      const subjectHeader = message.payload.headers.find(h => h.name.toLowerCase() === 'subject');
+      const subject = subjectHeader?.value || 'Unknown';
+      
+      // Create a synthetic email for grouping
+      const syntheticEmail = `unknown-${subject.replace(/[^a-zA-Z0-9]/g, '-').toLowerCase()}@unknown.com`;
+      
+      if (!conversations[syntheticEmail]) {
+        conversations[syntheticEmail] = {
+          person: {
+            email: syntheticEmail,
+            name: subject || 'Unknown Sender',
+            lastMessageDate: '',
+            lastMessageSnippet: '',
+            unreadCount: 0,
+          },
+          messages: [],
+        };
+      }
+      
+      conversations[syntheticEmail].messages.push(message);
     }
   });
+  
+  console.log(`Grouped into ${Object.keys(conversations).length} conversations (${ungroupedCount} messages couldn't be grouped by sender/recipient)`);
   
   // Sort messages within each conversation by date
   Object.values(conversations).forEach(conversation => {
@@ -262,66 +523,59 @@ export const extractEmailContent = (payload: any): { html: string; text: string 
   let text = '';
   
   const processPart = (part: any) => {
-    if (part.mimeType === 'text/plain' && part.body && part.body.data) {
-      text = decodeEmailBody(part.body);
-    } else if (part.mimeType === 'text/html' && part.body && part.body.data) {
+    if (part.mimeType === 'text/html' && part.body && part.body.data) {
       html = decodeEmailBody(part.body);
+    } else if (part.mimeType === 'text/plain' && part.body && part.body.data) {
+      text = decodeEmailBody(part.body);
     }
     
-    // Process nested parts if any
-    if (part.parts && part.parts.length) {
+    // Process nested parts
+    if (part.parts) {
       part.parts.forEach(processPart);
     }
   };
   
-  // Process the main body
-  if (payload.body && payload.body.data) {
-    if (payload.mimeType === 'text/plain') {
-      text = decodeEmailBody(payload.body);
-    } else if (payload.mimeType === 'text/html') {
-      html = decodeEmailBody(payload.body);
-    }
-  }
-  
-  // Process parts if main body doesn't have content
-  if (payload.parts && payload.parts.length) {
-    payload.parts.forEach(processPart);
-  }
+  processPart(payload);
   
   return { html, text };
 };
 
-// Add a sendEmail function implementation here
+/**
+ * Send an email via Gmail API
+ */
+export const sendEmail = async (to: string, subject: string, body: string, userEmail: string): Promise<boolean> => {
+  try {
+    // Create the email content in RFC 2822 format
+    const emailContent = [
+      `From: ${userEmail}`,
+      `To: ${to}`,
+      `Subject: ${subject}`,
+      'Content-Type: text/html; charset=utf-8',
+      '',
+      body
+    ].join('\r\n');
 
-export const sendEmail = async (to: string, subject: string, body: string, userEmail: string) => {
-  // In a real implementation, this would use Gmail API to send emails
-  // For now, we'll simulate sending an email and add it to the message list
-  
-  // Create a mock email message
-  const newMessage = {
-    id: `msg-${Date.now()}`,
-    threadId: `thread-${Date.now()}`,
-    labelIds: ['SENT'],
-    snippet: body.substring(0, 100) + (body.length > 100 ? '...' : ''),
-    payload: {
-      mimeType: 'text/html',
-      headers: [
-        { name: 'From', value: `${userEmail}` },
-        { name: 'To', value: to },
-        { name: 'Subject', value: subject },
-        { name: 'Date', value: new Date().toISOString() },
-      ],
-      body: {
-        size: body.length,
-        data: btoa(body),
-      },
-    },
-    sizeEstimate: body.length,
-    historyId: Date.now().toString(),
-    internalDate: Date.now().toString(),
-  };
-  
-  // In a real app, we would call the Gmail API here
-  // But for now, we'll return the mock message
-  return { message: newMessage, success: true };
+    // Encode the email in base64 format suitable for the Gmail API
+    const base64EncodedEmail = btoa(
+      unescape(encodeURIComponent(emailContent))
+    ).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+
+    // Send the email using the Gmail API
+    const response = await gapi.client.gmail.users.messages.send({
+      userId: 'me',
+      resource: {
+        raw: base64EncodedEmail
+      }
+    });
+
+    if (response && response.status === 200) {
+      return true;
+    } else {
+      console.error('Error sending email:', response);
+      return false;
+    }
+  } catch (error) {
+    console.error('Failed to send email:', error);
+    return false;
+  }
 }; 

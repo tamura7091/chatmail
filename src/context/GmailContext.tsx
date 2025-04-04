@@ -157,9 +157,11 @@ export const GmailProvider: React.FC<GmailProviderProps> = ({ children }) => {
     const initialize = async () => {
       try {
         setIsLoading(true);
+        setError(null);
 
         if (useMockData) {
           // Use mock data
+          console.log('Using mock data for initialization');
           setTimeout(() => {
             setIsAuthenticated(true);
             setUserProfile(mockUserProfile);
@@ -188,19 +190,54 @@ export const GmailProvider: React.FC<GmailProviderProps> = ({ children }) => {
           }, 1000); // Simulate loading delay
         } else {
           // Use real API
-          await loadGmailApi();
+          console.log('Initializing with real Gmail API');
           
-          if (isUserSignedIn()) {
-            setIsAuthenticated(true);
-            const profile = await getUserProfile();
-            setUserProfile(profile);
-            await loadInitialMessages();
+          try {
+            // First, just initialize the GAPI client
+            await loadGmailApi();
+            console.log('Gmail API loaded successfully');
+            
+            // Check if user is already signed in
+            const signedIn = isUserSignedIn();
+            console.log('Initial auth check - User is signed in:', signedIn);
+            
+            if (signedIn) {
+              console.log('User is already signed in, fetching profile');
+              setIsAuthenticated(true);
+              
+              try {
+                // Get user profile
+                const profile = await getUserProfile();
+                console.log('User profile fetched:', profile);
+                setUserProfile(profile);
+                
+                // Load initial messages
+                console.log('Loading initial messages...');
+                await loadInitialMessages();
+              } catch (profileError) {
+                console.error('Error fetching user data:', profileError);
+                // If we can't fetch profile or messages, the token may be invalid or expired
+                console.log('Token may be invalid, clearing and requiring sign-in');
+                sessionStorage.removeItem('gmail_access_token');
+                setIsAuthenticated(false);
+                setError('Session expired. Please sign in again.');
+              }
+            } else {
+              console.log('User not signed in. Waiting for sign-in.');
+              // User will need to sign in manually
+              setIsAuthenticated(false);
+            }
+          } catch (apiError) {
+            console.error('Error initializing Gmail API:', apiError);
+            setError('Failed to initialize Gmail API. Please try again.');
+            setIsAuthenticated(false);
           }
+          
           setIsLoading(false);
         }
       } catch (err) {
-        console.error('Error initializing Gmail API:', err);
-        setError('Failed to initialize Gmail API');
+        console.error('Unexpected error during initialization:', err);
+        setError('An unexpected error occurred. Please reload the app.');
         setIsLoading(false);
       }
     };
@@ -210,31 +247,132 @@ export const GmailProvider: React.FC<GmailProviderProps> = ({ children }) => {
 
   const loadInitialMessages = async () => {
     try {
+      console.log('Starting to load initial messages...');
       setLoadingMessages(true);
-      const { messages: newMessages, nextPageToken: token } = await fetchMessages();
-      setMessages(newMessages);
-      setNextPageToken(token);
+      setError(null);
       
-      if (userProfile && userProfile.email) {
-        const groupedConversations = groupMessagesByPerson(newMessages, userProfile.email);
-        // Add action suggestions
-        const conversationsWithActions = generateActionSuggestions(groupedConversations);
-        setConversations(conversationsWithActions);
+      if (!useMockData) {
+        console.log('Using real Gmail API to fetch messages');
+        try {
+          const { messages: newMessages, nextPageToken: token } = await fetchMessages();
+          
+          console.log(`Fetched ${newMessages.length} messages, nextPageToken: ${token ? 'present' : 'not present'}`);
+          
+          if (newMessages && newMessages.length > 0) {
+            setMessages(newMessages);
+            setNextPageToken(token);
+            
+            // Get the current user profile 
+            const currentUser = userProfile;
+            
+            // If userProfile state isn't set yet, try to get it directly
+            if (!currentUser || !currentUser.email) {
+              try {
+                console.log('User profile not available in state, fetching directly');
+                const profile = await getUserProfile();
+                console.log('Got user profile directly:', profile);
+                setUserProfile(profile);
+                
+                // Use the fetched profile to group messages
+                console.log(`Grouping messages by person using email: ${profile.email}`);
+                const groupedConversations = groupMessagesByPerson(newMessages, profile.email);
+                console.log(`Created ${Object.keys(groupedConversations).length} conversations`);
+                
+                // Add action suggestions
+                const conversationsWithActions = generateActionSuggestions(groupedConversations);
+                setConversations(conversationsWithActions);
+                
+                // Auto-select the first conversation
+                const firstConversationKey = Object.keys(conversationsWithActions)[0];
+                if (firstConversationKey) {
+                  console.log('Auto-selecting first conversation:', firstConversationKey);
+                  setCurrentPerson(firstConversationKey);
+                }
+              } catch (profileError) {
+                console.error('Failed to fetch user profile directly:', profileError);
+                setError('Could not determine user email for message grouping');
+              }
+            } else {
+              // Use the existing userProfile
+              console.log(`Grouping messages by person using email: ${currentUser.email}`);
+              const groupedConversations = groupMessagesByPerson(newMessages, currentUser.email);
+              console.log(`Created ${Object.keys(groupedConversations).length} conversations`);
+              
+              // Add action suggestions
+              const conversationsWithActions = generateActionSuggestions(groupedConversations);
+              setConversations(conversationsWithActions);
+              
+              // Auto-select the first conversation
+              const firstConversationKey = Object.keys(conversationsWithActions)[0];
+              if (firstConversationKey) {
+                console.log('Auto-selecting first conversation:', firstConversationKey);
+                setCurrentPerson(firstConversationKey);
+              }
+            }
+          } else {
+            console.log('No messages found or empty response');
+            // Set empty state
+            setMessages([]);
+            setConversations({});
+          }
+        } catch (fetchError) {
+          console.error('Error in fetchMessages:', fetchError);
+          setError('Failed to fetch messages from Gmail');
+          
+          // Try using a different query if fetching inbox fails
+          try {
+            console.log('Attempting to fetch with different parameters...');
+            const listResponse = await gapi.client.gmail.users.messages.list({
+              userId: 'me',
+              maxResults: 10,
+              q: '',  // Empty query to get any messages
+            });
+            
+            console.log('Alternative fetch response:', listResponse);
+            if (listResponse.result.messages && listResponse.result.messages.length > 0) {
+              console.log(`Found ${listResponse.result.messages.length} messages with alternative query`);
+            } else {
+              console.log('No messages found with alternative query');
+            }
+          } catch (altFetchError) {
+            console.error('Alternative fetch also failed:', altFetchError);
+          }
+        }
+      } else {
+        // Use mock data
+        console.log('Using mock data instead of real API');
+        setTimeout(() => {
+          setMessages(mockMessages);
+          // Add action suggestions to mock conversations
+          const conversationsWithActions = generateActionSuggestions(mockConversations);
+          setConversations(conversationsWithActions);
+          
+          // Auto-select the first conversation for mock data too
+          const firstConversationKey = Object.keys(conversationsWithActions)[0];
+          if (firstConversationKey) {
+            console.log('Auto-selecting first mock conversation:', firstConversationKey);
+            setCurrentPerson(firstConversationKey);
+          }
+        }, 500); // Simulate loading delay
       }
     } catch (err) {
       console.error('Error loading messages:', err);
       setError('Failed to load messages');
     } finally {
       setLoadingMessages(false);
+      console.log('Finished loading messages process');
     }
   };
 
   const handleSignIn = async () => {
     try {
       setIsLoading(true);
+      setError(null);
+      console.log('Starting sign-in process...');
       
       if (useMockData) {
         // Use mock data for sign in
+        console.log('Using mock data for sign-in');
         setTimeout(() => {
           setIsAuthenticated(true);
           setUserProfile(mockUserProfile);
@@ -262,65 +400,158 @@ export const GmailProvider: React.FC<GmailProviderProps> = ({ children }) => {
           setIsLoading(false);
         }, 1000); // Simulate loading delay
       } else {
-        // Use real API for sign in
-        await signIn();
-        setIsAuthenticated(true);
+        // Real Gmail API authentication
+        console.log('Signing in with real Gmail API');
         
-        const profile = await getUserProfile();
-        setUserProfile(profile);
+        try {
+          // First sign in to get authenticated
+          await signIn();
+          console.log('Sign-in successful, checking authentication status');
+          
+          // Verify we have a valid token
+          if (isUserSignedIn()) {
+            console.log('Authentication confirmed, fetching user profile');
+            setIsAuthenticated(true);
+            
+            try {
+              // Get the user profile
+              const profile = await getUserProfile();
+              console.log('User profile fetched:', profile);
+              
+              // Make sure the profile is set in state BEFORE trying to load messages
+              setUserProfile(profile);
+              
+              // Wait for profile to be set before continuing
+              await new Promise(resolve => setTimeout(resolve, 100));
+              
+              // Load messages
+              console.log('Loading messages after successful sign-in');
+              await loadInitialMessages();
+              
+              // Initialize empty groups for real API usage
+              setGroups({});
+              console.log('Sign-in and data loading complete');
+            } catch (dataError) {
+              console.error('Error loading user data after sign-in:', dataError);
+              setError('Failed to load your email data');
+              // Still keep authenticated status so the user can retry
+            }
+          } else {
+            console.error('Authentication failed - no valid token after sign-in');
+            throw new Error('Failed to authenticate with Gmail');
+          }
+        } catch (authError) {
+          console.error('Authentication error:', authError);
+          setIsAuthenticated(false);
+          setError('Failed to sign in to Gmail. Please try again.');
+        }
         
-        await loadInitialMessages();
         setIsLoading(false);
       }
-    } catch (err) {
-      console.error('Error signing in:', err);
-      setError('Failed to sign in');
+    } catch (error) {
+      console.error('Sign in error:', error);
+      setError('Failed to sign in to Gmail');
+      setIsAuthenticated(false);
       setIsLoading(false);
     }
   };
 
   const handleSignOut = async () => {
     try {
+      setIsLoading(true);
+      
       if (!useMockData) {
+        // Real sign out with Gmail API
         await signOut();
       }
       
+      // Reset all state regardless of mock/real mode
       setIsAuthenticated(false);
       setUserProfile(null);
       setMessages([]);
       setConversations({});
       setNextPageToken(undefined);
       setCurrentPerson(null);
-      setSelectedView('conversation');
-      setSelectedId(null);
-    } catch (err) {
-      console.error('Error signing out:', err);
-      setError('Failed to sign out');
+      setSpecialFolders({
+        others: {
+          id: 'others',
+          name: 'Others',
+          type: 'others',
+          lastMessageDate: new Date().toString(),
+          lastMessageSnippet: 'Promotional emails, newsletters, and other non-personal messages',
+          unreadCount: 0
+        },
+        reply_needed: {
+          id: 'reply_needed',
+          name: 'Reply Needed',
+          type: 'reply_needed',
+          lastMessageDate: new Date().toString(),
+          lastMessageSnippet: 'Emails that need your response',
+          unreadCount: 0
+        }
+      });
+      setGroups({});
+      setError(null);
+    } catch (error) {
+      console.error('Sign out error:', error);
+      setError('Failed to sign out from Gmail');
+    } finally {
+      setIsLoading(false);
     }
   };
 
   const loadMoreMessages = async () => {
-    if (useMockData || !nextPageToken || loadingMessages) return;
-    
     try {
+      if (loadingMessages || !nextPageToken) return;
+      
       setLoadingMessages(true);
-      const { messages: newMessages, nextPageToken: token } = await fetchMessages(nextPageToken);
+      setError(null);
       
-      // Combine with existing messages
-      const updatedMessages = [...messages, ...newMessages];
-      setMessages(updatedMessages);
-      setNextPageToken(token);
-      
-      if (userProfile && userProfile.email) {
-        const groupedConversations = groupMessagesByPerson(updatedMessages, userProfile.email);
-        // Add action suggestions
-        const conversationsWithActions = generateActionSuggestions(groupedConversations);
-        setConversations(conversationsWithActions);
+      if (useMockData) {
+        // Simulate loading more messages with mock data
+        setTimeout(() => {
+          // In a real implementation, we would fetch more messages
+          // For mock data, we'll just show the same messages again
+          setMessages(prevMessages => [...prevMessages, ...mockMessages]);
+          
+          // Pretend we've reached the end of the list
+          setNextPageToken(undefined);
+          
+          // Update conversations
+          const allMessages = [...messages, ...mockMessages];
+          if (userProfile) {
+            const groupedConversations = groupMessagesByPerson(allMessages, userProfile.email);
+            const conversationsWithActions = generateActionSuggestions(groupedConversations);
+            setConversations(conversationsWithActions);
+          }
+          
+          setLoadingMessages(false);
+        }, 1000);
+      } else {
+        // Real Gmail API pagination
+        const { messages: newMessages, nextPageToken: token } = await fetchMessages(nextPageToken);
+        
+        if (newMessages && newMessages.length > 0) {
+          setMessages(prevMessages => [...prevMessages, ...newMessages]);
+          setNextPageToken(token);
+          
+          // Update conversations with all messages
+          const allMessages = [...messages, ...newMessages];
+          if (userProfile && userProfile.email) {
+            const groupedConversations = groupMessagesByPerson(allMessages, userProfile.email);
+            const conversationsWithActions = generateActionSuggestions(groupedConversations);
+            setConversations(conversationsWithActions);
+          }
+        } else {
+          // No more messages
+          setNextPageToken(undefined);
+        }
+        
+        setLoadingMessages(false);
       }
-    } catch (err) {
-      console.error('Error loading more messages:', err);
+    } catch (error) {
+      console.error('Error loading more messages:', error);
       setError('Failed to load more messages');
-    } finally {
       setLoadingMessages(false);
     }
   };
@@ -657,71 +888,92 @@ export const GmailProvider: React.FC<GmailProviderProps> = ({ children }) => {
 
   const sendMessage = async (to: string, body: string): Promise<boolean> => {
     try {
-      if (!userProfile) return false;
+      setLoadingMessages(true);
       
-      // Create a subject line based on the first few words of the message
-      const subject = body.split(' ').slice(0, 5).join(' ') + '...';
-      
-      // Call the sendEmail function
-      const { message, success } = await sendEmail(
-        to, 
-        subject, 
-        body, 
-        userProfile.email
-      );
-      
-      if (success && message) {
-        // Add the message to our state
-        setMessages(prev => [...prev, message]);
+      if (userProfile) {
+        // Get current date
+        const currentDate = new Date().toISOString();
+        const subject = "New message"; // Default subject
         
-        // Add to the conversation
-        setConversations(prev => {
-          // Check if a conversation with this person already exists
-          const lowerCaseEmail = to.toLowerCase();
-          if (prev[lowerCaseEmail]) {
-            // Update existing conversation
-            return {
-              ...prev,
-              [lowerCaseEmail]: {
-                ...prev[lowerCaseEmail],
-                messages: [...prev[lowerCaseEmail].messages, message],
-                person: {
-                  ...prev[lowerCaseEmail].person,
-                  lastMessageDate: new Date().toString(),
-                  lastMessageSnippet: body.substring(0, 100) + (body.length > 100 ? '...' : ''),
-                  action: "Waiting for reply" // Set action after sending
-                }
-              }
-            };
+        if (useMockData) {
+          // Mock implementation - add simulated delay
+          await new Promise(resolve => setTimeout(resolve, 500));
+          
+          // Create a mock message for display
+          const mockMessage: EmailMessage = {
+            id: `msg-${Date.now()}`,
+            threadId: `thread-${Date.now()}`,
+            labelIds: ['SENT'],
+            snippet: body.substring(0, 100) + (body.length > 100 ? '...' : ''),
+            payload: {
+              mimeType: 'text/html',
+              headers: [
+                { name: 'From', value: `${userProfile.name} <${userProfile.email}>` },
+                { name: 'To', value: to },
+                { name: 'Subject', value: subject },
+                { name: 'Date', value: currentDate },
+              ],
+              body: {
+                size: body.length,
+                data: btoa(body),
+              },
+            },
+            sizeEstimate: body.length,
+            historyId: Date.now().toString(),
+            internalDate: Date.now().toString(),
+          };
+          
+          // Update conversations state
+          const recipientEmail = to.toLowerCase();
+          const updatedConversations = {...conversations};
+          
+          if (updatedConversations[recipientEmail]) {
+            // Add to existing conversation
+            updatedConversations[recipientEmail].messages.push(mockMessage);
+            updatedConversations[recipientEmail].person.lastMessageDate = currentDate;
+            updatedConversations[recipientEmail].person.lastMessageSnippet = mockMessage.snippet;
           } else {
-            // Create a new conversation
-            const newPerson: Person = {
-              email: to,
-              lastMessageDate: new Date().toString(),
-              lastMessageSnippet: body.substring(0, 100) + (body.length > 100 ? '...' : ''),
-              unreadCount: 0,
-              action: "Waiting for reply" // Set action for new conversation
-            };
-            
-            return {
-              ...prev,
-              [lowerCaseEmail]: {
-                person: newPerson,
-                messages: [message]
-              }
+            // Create new conversation
+            updatedConversations[recipientEmail] = {
+              person: {
+                email: recipientEmail,
+                name: recipientEmail.split('@')[0], // Use email username as name
+                lastMessageDate: currentDate,
+                lastMessageSnippet: mockMessage.snippet,
+                unreadCount: 0,
+                action: "Waiting for reply"
+              },
+              messages: [mockMessage]
             };
           }
-        });
-        
-        setIsCreatingNewConversation(false);
-        return true;
+          
+          setConversations(updatedConversations);
+          return true;
+        } else {
+          // Real implementation using Gmail API
+          const success = await sendEmail(to, subject, body, userProfile.email);
+          
+          if (success) {
+            // After sending email, refresh conversations to include the sent message
+            await loadInitialMessages();
+            
+            // If this is to a new recipient, select them
+            if (!conversations[to.toLowerCase()]) {
+              setCurrentPerson(to.toLowerCase());
+            }
+            
+            return true;
+          }
+          return false;
+        }
       }
-      
       return false;
-    } catch (err) {
-      console.error('Error sending message:', err);
+    } catch (error) {
+      console.error('Error sending message:', error);
       setError('Failed to send message');
       return false;
+    } finally {
+      setLoadingMessages(false);
     }
   };
 

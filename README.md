@@ -123,3 +123,39 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+## Gmail Integration Setup
+
+To connect the application to your Gmail account:
+
+1. Create a Google Cloud project:
+   - Go to [Google Cloud Console](https://console.cloud.google.com/)
+   - Create a new project
+   - Enable the Gmail API for your project
+
+2. Set up OAuth credentials:
+   - Go to "APIs & Services" > "Credentials"
+   - Click "Create Credentials" > "OAuth client ID"
+   - Select "Web application" as the application type
+   - Add authorized JavaScript origins (http://localhost:3000 for local development)
+   - Add authorized redirect URIs (http://localhost:3000 for local development)
+   - Note your Client ID and API Key
+
+3. Configure consent screen:
+   - Go to "APIs & Services" > "OAuth consent screen"
+   - Fill in the required fields (app name, user support email, developer contact)
+   - Add the scopes: gmail.readonly, userinfo.email, userinfo.profile, gmail.send
+   - Add your email as a test user
+
+4. Update your environment variables:
+   - Copy the `.env.local.example` file to `.env.local`
+   - Set `NEXT_PUBLIC_GOOGLE_CLIENT_ID` to your OAuth client ID
+   - Set `NEXT_PUBLIC_GOOGLE_API_KEY` to your API key
+   - Set `NEXT_PUBLIC_USE_MOCK_DATA=false` to use the real Gmail API
+
+5. Start the development server:
+   ```bash
+   npm run dev
+   ```
+
+6. Sign in with your Google account when prompted

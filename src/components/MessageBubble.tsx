@@ -197,7 +197,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isFromUse
             {showRemindDropdown && (
               <div 
                 id="remind-dropdown"
-                className="absolute right-0 mt-1 z-10 bg-white rounded-md shadow-lg border border-gray-200 py-1 w-48"
+                className="absolute right-0 bottom-full mb-1 z-10 bg-white rounded-md shadow-lg border border-gray-200 py-1 w-48"
               >
                 <div className="px-3 py-1 text-xs font-semibold text-gray-500 border-b">
                   Remind me in:
@@ -247,7 +247,7 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({ message, isFromUse
               {showFollowUpDropdown && (
                 <div 
                   id="followup-dropdown"
-                  className="absolute right-0 mt-1 z-10 bg-white rounded-md shadow-lg border border-gray-200 py-1 w-48"
+                  className="absolute right-0 bottom-full mb-1 z-10 bg-white rounded-md shadow-lg border border-gray-200 py-1 w-48"
                 >
                   <div className="px-3 py-1 text-xs font-semibold text-gray-500 border-b">
                     Auto follow-up if no reply:
