@@ -228,6 +228,8 @@ export const fetchMessages = async (pageToken?: string, forceRefresh?: boolean):
   nextPageToken?: string;
 }> => {
   try {
+    const { getLastSyncTime, updateLastSyncTime, getAllMessages, storeMessages } = await import('./storageHelper');
+    
     console.log('Fetching messages from Gmail API...');
     
     // Ensure we have a token set
@@ -240,16 +242,70 @@ export const fetchMessages = async (pageToken?: string, forceRefresh?: boolean):
     // Make sure the token is set for this request
     gapi.client.setToken({ access_token: token });
     
-    // First, try with inbox query
+    // Get cached messages first if not forcing refresh
+    if (!forceRefresh && !pageToken) {
+      const cachedMessages = await getAllMessages();
+      if (cachedMessages && cachedMessages.length > 0) {
+        console.log(`Loaded ${cachedMessages.length} messages from local cache`);
+        
+        // Only fetch new messages since the last sync
+        const lastSyncTime = await getLastSyncTime();
+        if (lastSyncTime > 0) {
+          // Convert to date format for query
+          const lastSyncDate = new Date(lastSyncTime);
+          const formattedDate = lastSyncDate.toISOString().split('T')[0]; // YYYY-MM-DD format
+          
+          console.log(`Fetching only messages since ${formattedDate}`);
+          
+          // Fetch only newer messages to merge with cache
+          const newMessages = await fetchNewMessagesSinceDate(formattedDate);
+          
+          if (newMessages.messages.length > 0) {
+            console.log(`Fetched ${newMessages.messages.length} new messages since last sync`);
+            
+            // Merge with cache (avoid duplicates)
+            const existingIds = new Set(cachedMessages.map(msg => msg.id));
+            const uniqueNewMessages = newMessages.messages.filter(msg => !existingIds.has(msg.id));
+            
+            if (uniqueNewMessages.length > 0) {
+              console.log(`Adding ${uniqueNewMessages.length} unique new messages to cache`);
+              
+              // Store new messages in cache
+              await storeMessages(uniqueNewMessages);
+              
+              // Update last sync time
+              await updateLastSyncTime();
+              
+              // Return combined messages
+              return {
+                messages: [...cachedMessages, ...uniqueNewMessages],
+                nextPageToken: newMessages.nextPageToken
+              };
+            }
+          }
+          
+          // If no new messages, just return cache
+          return { messages: cachedMessages };
+        }
+      }
+    }
+    
+    // If no cache or forceRefresh, do a full fetch
+    let query = 'in:inbox';
+    
+    // If force refreshing, only get recent messages
+    if (forceRefresh) {
+      query = 'newer_than:1d in:inbox';
+    }
+    
+    // First, get message IDs
     let listResponse;
     try {
-      // First, get message IDs
       listResponse = await gapi.client.gmail.users.messages.list({
         userId: 'me',
         maxResults: MAX_RESULTS,
         pageToken,
-        // Fetch from inbox by default to ensure we get user's emails
-        q: forceRefresh ? 'newer_than:1d in:inbox' : 'in:inbox',
+        q: query,
       });
     } catch (inboxError) {
       console.error('Error fetching inbox messages, trying without query:', inboxError);
@@ -298,6 +354,14 @@ export const fetchMessages = async (pageToken?: string, forceRefresh?: boolean):
     );
 
     console.log(`Successfully fetched ${messages.length} full messages`);
+    
+    // Store messages in IndexedDB for future use
+    if (messages.length > 0) {
+      console.log('Storing messages in local cache');
+      await storeMessages(messages);
+      await updateLastSyncTime();
+    }
+    
     return {
       messages,
       nextPageToken: listResponse.result.nextPageToken || undefined,
@@ -317,9 +381,79 @@ export const fetchMessages = async (pageToken?: string, forceRefresh?: boolean):
         sessionStorage.removeItem('gmail_access_token');
       }
     }
+    
+    // Try to return cached messages in case of network error
+    try {
+      const { getAllMessages } = await import('./storageHelper');
+      const cachedMessages = await getAllMessages();
+      if (cachedMessages && cachedMessages.length > 0) {
+        console.log(`Returning ${cachedMessages.length} cached messages due to fetch error`);
+        return { messages: cachedMessages };
+      }
+    } catch (cacheError) {
+      console.error('Error loading from cache:', cacheError);
+    }
+    
     throw error;
   }
 };
+
+/**
+ * Helper function to fetch only new messages since a specific date
+ */
+async function fetchNewMessagesSinceDate(date: string): Promise<{
+  messages: EmailMessage[];
+  nextPageToken?: string;
+}> {
+  const token = sessionStorage.getItem('gmail_access_token');
+  if (!token) {
+    throw new Error('No access token available');
+  }
+  
+  // Make sure the token is set for this request
+  gapi.client.setToken({ access_token: token });
+  
+  // Query for messages after the date
+  const query = `after:${date}`;
+  
+  const listResponse = await gapi.client.gmail.users.messages.list({
+    userId: 'me',
+    maxResults: MAX_RESULTS,
+    q: query,
+  });
+  
+  if (!listResponse || !listResponse.result || !listResponse.result.messages) {
+    return { messages: [] };
+  }
+  
+  const messageIds = listResponse.result.messages || [];
+  
+  if (!messageIds.length) {
+    return { messages: [] };
+  }
+  
+  // Fetch the full messages
+  const messages = await Promise.all(
+    messageIds.map(async (message) => {
+      if (!message.id) {
+        throw new Error('Message ID is missing');
+      }
+      
+      const fullMessage = await gapi.client.gmail.users.messages.get({
+        userId: 'me',
+        id: message.id,
+        format: 'full',
+      });
+      
+      return fullMessage.result as EmailMessage;
+    })
+  );
+  
+  return {
+    messages,
+    nextPageToken: listResponse.result.nextPageToken,
+  };
+}
 
 /**
  * Parse email headers to extract sender or primary recipient

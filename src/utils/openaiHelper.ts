@@ -12,6 +12,20 @@ export const isRealHumanEmail = async (message: EmailMessage): Promise<boolean> 
       return true; // Default to true for very short messages
     }
     
+    // Try to load from storage first
+    try {
+      const { getDerivedData } = await import('./storageHelper');
+      const derivedData = await getDerivedData(message.id);
+      
+      // If we have previously analyzed this message, use the stored result
+      if (derivedData && derivedData.isRealHuman !== undefined) {
+        console.log(`Using cached AI classification for message ${message.id}: isRealHuman=${derivedData.isRealHuman}`);
+        return derivedData.isRealHuman;
+      }
+    } catch (storageError) {
+      console.log('Could not access storage for message classification, will use AI:', storageError);
+    }
+    
     // First check if OpenAI API key is configured
     if (!process.env.NEXT_PUBLIC_OPENAI_API_KEY) {
       console.error('OpenAI API key not configured for isRealHumanEmail');
@@ -79,20 +93,55 @@ export const isRealHumanEmail = async (message: EmailMessage): Promise<boolean> 
     if (!response.ok) {
       const errorText = await response.text();
       console.error(`OpenAI API error (${response.status}):`, errorText);
-      return true; // Default to true (real human) on API error
+      
+      // On error, fallback to pattern matching
+      const isAutomated = isAutomatedEmail(message);
+      const result = !isAutomated;
+      
+      // Store the result for future use
+      try {
+        const { storeDerivedData } = await import('./storageHelper');
+        await storeDerivedData(message.id, { isRealHuman: result });
+      } catch (storageError) {
+        console.error('Error storing derived data:', storageError);
+      }
+      
+      return result;
     }
 
     const data = await response.json();
     
     if (data.error) {
       console.error('OpenAI API error:', data.error);
-      return true; // Default to true on error
+      
+      // On error, fallback to pattern matching
+      const isAutomated = isAutomatedEmail(message);
+      const result = !isAutomated;
+      
+      // Store the result for future use
+      try {
+        const { storeDerivedData } = await import('./storageHelper');
+        await storeDerivedData(message.id, { isRealHuman: result });
+      } catch (storageError) {
+        console.error('Error storing derived data:', storageError);
+      }
+      
+      return result;
     }
 
     const result = data.choices[0]?.message?.content?.trim().toLowerCase();
     const isHuman = result === 'true';
     
     console.log(`Email from "${from}" isRealHuman: ${isHuman}`);
+    
+    // Store the result for future use
+    try {
+      const { storeDerivedData } = await import('./storageHelper');
+      await storeDerivedData(message.id, { isRealHuman: isHuman });
+    } catch (storageError) {
+      console.error('Error storing derived data:', storageError);
+    }
+    
     return isHuman;
   } catch (error) {
     console.error('Error checking if email is from real human:', error);
@@ -166,6 +215,20 @@ export const detectActionNeeded = async (message: EmailMessage): Promise<string 
       return null;
     }
     
+    // Try to load from storage first
+    try {
+      const { getDerivedData } = await import('./storageHelper');
+      const derivedData = await getDerivedData(message.id);
+      
+      // If we have previously analyzed this message, use the stored result
+      if (derivedData && derivedData.actionNeeded !== undefined) {
+        console.log(`Using cached action needed for message ${message.id}: ${derivedData.actionNeeded}`);
+        return derivedData.actionNeeded;
+      }
+    } catch (storageError) {
+      console.log('Could not access storage for action detection, will use AI:', storageError);
+    }
+    
     // First check if OpenAI API key is configured
     if (!process.env.NEXT_PUBLIC_OPENAI_API_KEY) {
       console.error('OpenAI API key not configured for detectActionNeeded');
@@ -233,6 +296,15 @@ export const detectActionNeeded = async (message: EmailMessage): Promise<string 
     if (!response.ok) {
       const errorText = await response.text();
       console.error(`OpenAI API error (${response.status}):`, errorText);
+      
+      // Store null result for future reference
+      try {
+        const { storeDerivedData } = await import('./storageHelper');
+        await storeDerivedData(message.id, { actionNeeded: undefined });
+      } catch (storageError) {
+        console.error('Error storing derived data:', storageError);
+      }
+      
       return null;
     }
     
@@ -240,6 +312,15 @@ export const detectActionNeeded = async (message: EmailMessage): Promise<string 
     
     if (data.error) {
       console.error('OpenAI API error:', data.error);
+      
+      // Store null result for future reference
+      try {
+        const { storeDerivedData } = await import('./storageHelper');
+        await storeDerivedData(message.id, { actionNeeded: undefined });
+      } catch (storageError) {
+        console.error('Error storing derived data:', storageError);
+      }
+      
       return null;
     }
 
@@ -248,7 +329,23 @@ export const detectActionNeeded = async (message: EmailMessage): Promise<string 
     
     // Only return if it's not null and not an empty string
     if (result && result.toLowerCase() !== 'null' && result.trim() !== '') {
+      // Store the result for future use
+      try {
+        const { storeDerivedData } = await import('./storageHelper');
+        await storeDerivedData(message.id, { actionNeeded: result });
+      } catch (storageError) {
+        console.error('Error storing derived data:', storageError);
+      }
+      
       return result;
+    }
+    
+    // Store null result for future reference
+    try {
+      const { storeDerivedData } = await import('./storageHelper');
+      await storeDerivedData(message.id, { actionNeeded: undefined });
+    } catch (storageError) {
+      console.error('Error storing derived data:', storageError);
     }
     
     return null;

@@ -268,189 +268,185 @@ export const GmailProvider: React.FC<GmailProviderProps> = ({ children }) => {
     initialize();
   }, []);
 
-  const loadInitialMessages = async () => {
-    console.log('Starting to load initial messages...');
-    setLoadingMessages(true);
-    setError(null);
-    
+  const loadInitialMessages = async (): Promise<boolean> => {
     try {
-      console.log('Using real Gmail API to fetch messages');
+      if (!isAuthenticated) {
+        console.log('Not authenticated, skipping message loading');
+        return false;
+      }
       
-      try {
-        const { messages: newMessages, nextPageToken: token } = await fetchMessages();
-        console.log(`Fetched ${newMessages.length} messages, nextPageToken: ${token ? 'present' : 'not present'}`);
+      console.log('Loading initial messages...');
+      setLoadingMessages(true);
+      
+      // Import storage helpers dynamically
+      const { 
+        storeMessages, 
+        getAllMessages, 
+        storeDerivedData,
+        getDerivedData,
+        storeUserProfile
+      } = await import('../utils/storageHelper');
+      
+      let messages: EmailMessage[] = [];
+      let token: string | undefined;
+      
+      // Always use real API in this context
+      console.log('Fetching messages from Gmail API...');
+      // Fetch messages from Gmail API
+      const { messages: fetchedMessages, nextPageToken } = await fetchMessages();
+      messages = fetchedMessages;
+      token = nextPageToken;
+      setNextPageToken(token);
+      
+      // Store messages in local cache
+      await storeMessages(messages);
+      
+      // Set messages
+      setMessages(messages);
+      
+      // If userProfile is not available yet, try to get it
+      if (!userProfile) {
+        try {
+          console.log('Fetching user profile...');
+          const profile = await getUserProfile();
+          setUserProfile(profile);
+          
+          // Store user profile in local cache
+          await storeUserProfile(profile);
+        } catch (error) {
+          console.error('Failed to get user profile:', error);
+          setError('Failed to get user profile');
+          setLoadingMessages(false);
+          return false;
+        }
+      }
+      
+      // If no messages or no user profile, show error
+      if (messages.length === 0 || !userProfile) {
+        console.log('No messages found or user profile missing');
+        setLoadingMessages(false);
+        return false;
+      }
+      
+      // Store the most recent automated messages for the "Others" folder
+      const recentAutomatedMessages: EmailMessage[] = [];
+      
+      // Check if messages already have isRealHuman and actionNeeded properties
+      // If not, process in batches to avoid too many simultaneous API calls
+      console.log(`Processing ${messages.length} messages...`);
+      
+      const BATCH_SIZE = 5;
+      for (let i = 0; i < messages.length; i += BATCH_SIZE) {
+        const batch = messages.slice(i, i + BATCH_SIZE);
         
-        if (newMessages && newMessages.length > 0) {
-          // Process the messages with OpenAI to identify real humans vs automated messages
-          console.log('Processing messages with AI to identify real humans...');
+        // Process batch in parallel
+        await Promise.all(batch.map(async (message) => {
+          // Check if we already have processed data for this message
+          const derivedData = await getDerivedData(message.id);
           
-          // Store the most recent automated messages for the "Others" folder
-          const recentAutomatedMessages: EmailMessage[] = [];
-          
-          // Process in batches to avoid too many simultaneous API calls
-          const BATCH_SIZE = 5;
-          for (let i = 0; i < newMessages.length; i += BATCH_SIZE) {
-            const batch = newMessages.slice(i, i + BATCH_SIZE);
-            
-            // Process the batch in parallel
-            const aiProcessingPromises = batch.map(async (message) => {
+          if (derivedData) {
+            // Use stored data
+            message.isRealHuman = derivedData.isRealHuman;
+            message.actionNeeded = derivedData.actionNeeded;
+          } else {
+            // Process with OpenAI
+            try {
               // Check if the message is from a real human
               const isRealHuman = await isRealHumanEmail(message);
-              
-              // Store the result on the message object for later use
               message.isRealHuman = isRealHuman;
+              
+              // Store the result
+              await storeDerivedData(message.id, { isRealHuman });
               
               // If it's not a real human, add to recent automated messages
               if (!isRealHuman) {
                 recentAutomatedMessages.push(message);
-              }
-              
-              // Only detect actions for real human messages to save API calls
-              if (isRealHuman) {
-                // Detect if action is needed
-                const actionNeeded = await detectActionNeeded(message);
-                if (actionNeeded) {
-                  // Store the action on the message object (ensuring non-null value)
-                  message.actionNeeded = actionNeeded;
-                  console.log(`Action needed for message from ${message.id}: ${actionNeeded}`);
+              } else {
+                // Only detect actions for real human messages to save API calls
+                try {
+                  const actionNeeded = await detectActionNeeded(message);
+                  if (actionNeeded) {
+                    message.actionNeeded = actionNeeded;
+                    
+                    // Update derived data with action
+                    await storeDerivedData(message.id, { 
+                      isRealHuman, 
+                      actionNeeded 
+                    });
+                    
+                    console.log(`Action needed for message from ${message.id}: ${actionNeeded}`);
+                  }
+                } catch (actionError) {
+                  console.error('Error detecting action needed:', actionError);
                 }
               }
-            });
-            
-            // Wait for all messages in this batch to be processed
-            await Promise.all(aiProcessingPromises);
-          }
-          
-          console.log(`AI processing complete. Identified real humans vs automated messages.`);
-          
-          // Limit the Others folder to show the most recent automated messages
-          const sortedAutomatedMessages = recentAutomatedMessages.sort(
-            (a, b) => parseInt(b.internalDate) - parseInt(a.internalDate)
-          );
-          
-          // Keep only the most recent automated messages (max 20)
-          const RECENT_LIMIT = 20;
-          const recentLimited = sortedAutomatedMessages.slice(0, RECENT_LIMIT);
-          
-          // Update the Others folder with count of promotional/automated emails
-          const othersFolder = {
-            ...specialFolders.others,
-            unreadCount: recentAutomatedMessages.length
-          };
-          
-          // Get last promotional email for the folder summary
-          if (recentAutomatedMessages.length > 0) {
-            const latestAutomated = recentAutomatedMessages[0];
-            
-            const dateHeader = latestAutomated.payload.headers.find(h => h.name.toLowerCase() === 'date');
-            if (dateHeader) {
-              othersFolder.lastMessageDate = dateHeader.value;
-            }
-            
-            othersFolder.lastMessageSnippet = latestAutomated.snippet;
-          }
-          
-          // Update special folders
-          setSpecialFolders(prev => ({
-            ...prev,
-            others: othersFolder
-          }));
-          
-          setMessages(newMessages);
-          setNextPageToken(token);
-          
-          // Get the current user profile 
-          const currentUser = userProfile;
-          
-          // If userProfile state isn't set yet, try to get it directly
-          if (!currentUser || !currentUser.email) {
-            try {
-              console.log('User profile not available in state, fetching directly');
-              const profile = await getUserProfile();
-              console.log('Got user profile directly:', profile);
-              setUserProfile(profile);
-              
-              // Use the fetched profile to group messages
-              console.log(`Grouping messages by person using email: ${profile.email}`);
-              
-              // Only group the real human messages for conversations
-              const realHumanMessages = newMessages.filter(msg => !!msg.isRealHuman);
-              console.log(`Filtering to ${realHumanMessages.length} real human messages for conversations`);
-              
-              const groupedConversations = groupMessagesByPerson(realHumanMessages, profile.email);
-              console.log(`Created ${Object.keys(groupedConversations).length} conversations`);
-              
-              // Add action suggestions
-              const conversationsWithActions = generateActionSuggestions(groupedConversations, newMessages);
-              setConversations(conversationsWithActions);
-              
-              // Auto-select the first conversation
-              const firstConversationKey = Object.keys(conversationsWithActions)[0];
-              if (firstConversationKey) {
-                console.log('Auto-selecting first conversation:', firstConversationKey);
-                setCurrentPerson(firstConversationKey);
-              }
-            } catch (profileError) {
-              console.error('Failed to fetch user profile directly:', profileError);
-              setError('Could not determine user email for message grouping');
-            }
-          } else {
-            // Use the existing userProfile
-            console.log(`Grouping messages by person using email: ${currentUser.email}`);
-            
-            // Only group the real human messages for conversations
-            const realHumanMessages = newMessages.filter(msg => !!msg.isRealHuman);
-            console.log(`Filtering to ${realHumanMessages.length} real human messages for conversations`);
-            
-            const groupedConversations = groupMessagesByPerson(realHumanMessages, currentUser.email);
-            console.log(`Created ${Object.keys(groupedConversations).length} conversations`);
-            
-            // Add action suggestions
-            const conversationsWithActions = generateActionSuggestions(groupedConversations, newMessages);
-            setConversations(conversationsWithActions);
-            
-            // Auto-select the first conversation
-            const firstConversationKey = Object.keys(conversationsWithActions)[0];
-            if (firstConversationKey) {
-              console.log('Auto-selecting first conversation:', firstConversationKey);
-              setCurrentPerson(firstConversationKey);
+            } catch (aiError) {
+              console.error('Error processing message with AI:', aiError);
+              // Handle fallback - assume it's a real human if AI fails
+              message.isRealHuman = true;
             }
           }
-        } else {
-          console.log('No messages found or empty response');
-          // Set empty state
-          setMessages([]);
-          setConversations({});
-        }
-      } catch (fetchError) {
-        console.error('Error in fetchMessages:', fetchError);
-        setError('Failed to fetch messages from Gmail');
+        }));
+      }
+      
+      // Update the Others folder with count of promotional/automated emails
+      console.log(`Found ${recentAutomatedMessages.length} automated messages`);
+      
+      const othersFolder = {
+        ...specialFolders.others,
+        unreadCount: recentAutomatedMessages.length
+      };
+      
+      // Get last promotional email for the folder summary
+      if (recentAutomatedMessages.length > 0) {
+        const sortedAutomatedMessages = recentAutomatedMessages.sort(
+          (a, b) => parseInt(b.internalDate) - parseInt(a.internalDate)
+        );
+        const latestAutomated = sortedAutomatedMessages[0];
         
-        // Try using a different query if fetching inbox fails
-        try {
-          console.log('Attempting to fetch with different parameters...');
-          const listResponse = await gapi.client.gmail.users.messages.list({
-            userId: 'me',
-            maxResults: 10,
-            q: '',  // Empty query to get any messages
-          });
-          
-          console.log('Alternative fetch response:', listResponse);
-          if (listResponse.result.messages && listResponse.result.messages.length > 0) {
-            console.log(`Found ${listResponse.result.messages.length} messages with alternative query`);
-          } else {
-            console.log('No messages found with alternative query');
-          }
-        } catch (altFetchError) {
-          console.error('Alternative fetch also failed:', altFetchError);
+        const dateHeader = latestAutomated.payload.headers.find(h => h.name.toLowerCase() === 'date');
+        if (dateHeader) {
+          othersFolder.lastMessageDate = dateHeader.value;
+        }
+        
+        othersFolder.lastMessageSnippet = latestAutomated.snippet;
+      }
+      
+      // Update special folders
+      setSpecialFolders(prev => ({
+        ...prev,
+        others: othersFolder
+      }));
+      
+      // Group messages by person
+      if (userProfile) {
+        const userEmailToUse = userProfile.email;
+        
+        // Only group the real human messages for conversations
+        const realHumanMessages = messages.filter(msg => !!msg.isRealHuman);
+        
+        console.log(`Grouping ${realHumanMessages.length} real human messages by person`);
+        const groupedConversations = groupMessagesByPerson(realHumanMessages, userEmailToUse);
+        
+        // Add action suggestions
+        const conversationsWithActions = generateActionSuggestions(groupedConversations, messages);
+        setConversations(conversationsWithActions);
+        
+        // If no conversation is selected, auto-select the first one
+        if (!currentPerson && Object.keys(conversationsWithActions).length > 0) {
+          const firstConversationKey = Object.keys(conversationsWithActions)[0];
+          setCurrentPerson(firstConversationKey);
         }
       }
-    } catch (error) {
-      console.error('Error loading messages:', error);
-      setError('Failed to load messages');
-    } finally {
+      
       setLoadingMessages(false);
-      console.log('Finished loading messages process');
+      setLastRefresh(new Date());
+      return true;
+    } catch (error) {
+      console.error('Error loading initial messages:', error);
+      setError('Failed to load messages');
+      setLoadingMessages(false);
+      return false;
     }
   };
 
