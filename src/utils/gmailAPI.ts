@@ -420,6 +420,50 @@ export const extractPersonFromHeaders = (headers: EmailHeader[], userEmail: stri
 };
 
 /**
+ * Check if a message is promotional or newsletter
+ */
+export const isPromotionalEmail = (message: EmailMessage): boolean => {
+  // Check if message has CATEGORY_PROMOTIONS label
+  if (message.labelIds && message.labelIds.includes('CATEGORY_PROMOTIONS')) {
+    return true;
+  }
+  
+  // Common newsletter/promotional keywords in subject
+  const subjectHeader = message.payload.headers.find(h => h.name.toLowerCase() === 'subject');
+  if (subjectHeader) {
+    const promoKeywords = ['newsletter', 'offer', 'deal', 'discount', 'sale', 'promo', 'unsubscribe', 
+                          'subscription', 'marketing', 'update', 'news', 'weekly', 'monthly'];
+    
+    const subjectLower = subjectHeader.value.toLowerCase();
+    if (promoKeywords.some(keyword => subjectLower.includes(keyword))) {
+      return true;
+    }
+  }
+  
+  // Check for common marketing senders
+  const fromHeader = message.payload.headers.find(h => h.name.toLowerCase() === 'from');
+  if (fromHeader) {
+    const marketingSenders = ['noreply', 'no-reply', 'donotreply', 'newsletter', 'marketing', 'notifications', 'updates'];
+    const fromLower = fromHeader.value.toLowerCase();
+    
+    if (marketingSenders.some(sender => fromLower.includes(sender))) {
+      return true;
+    }
+  }
+  
+  // Check for list-unsubscribe header (common in newsletters)
+  const hasUnsubscribe = message.payload.headers.some(h => 
+    h.name.toLowerCase() === 'list-unsubscribe'
+  );
+  
+  if (hasUnsubscribe) {
+    return true;
+  }
+  
+  return false;
+};
+
+/**
  * Group emails by person (sender or primary recipient)
  */
 export const groupMessagesByPerson = (
@@ -429,8 +473,15 @@ export const groupMessagesByPerson = (
   console.log(`Grouping ${messages.length} messages by person for user: ${userEmail}`);
   const conversations: Record<string, Conversation> = {};
   let ungroupedCount = 0;
+  let promotionalCount = 0;
   
   messages.forEach(message => {
+    // Skip promotional emails in conversation grouping
+    if (isPromotionalEmail(message)) {
+      promotionalCount++;
+      return;
+    }
+    
     const person = extractPersonFromHeaders(message.payload.headers, userEmail);
     
     if (person) {
@@ -472,7 +523,7 @@ export const groupMessagesByPerson = (
     }
   });
   
-  console.log(`Grouped into ${Object.keys(conversations).length} conversations (${ungroupedCount} messages couldn't be grouped by sender/recipient)`);
+  console.log(`Grouped into ${Object.keys(conversations).length} conversations (${ungroupedCount} messages couldn't be grouped by sender/recipient, ${promotionalCount} promotional emails filtered)`);
   
   // Sort messages within each conversation by date
   Object.values(conversations).forEach(conversation => {

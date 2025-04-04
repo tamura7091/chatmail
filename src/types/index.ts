@@ -1,12 +1,14 @@
 export interface EmailMessage {
   id: string;
   threadId: string;
-  labelIds: string[];
+  labelIds?: string[];
   snippet: string;
   payload: EmailPayload;
   sizeEstimate: number;
   historyId: string;
   internalDate: string;
+  isRealHuman?: boolean;
+  actionNeeded?: string;
 }
 
 export interface EmailPayload {
